@@ -1,6 +1,7 @@
 // Big Steal Car — menus: Altekz intro, GTA-style main menu, loading screen, settings, pause menu with map.
-import { $, el, fmtMoney } from './util.js';
-import { VERSION } from './config.js';
+import { $, el, fmtMoney, clamp } from './util.js';
+import { VERSION, WEAPONS, ARMOR_PRICE } from './config.js';
+import { wsvg } from './hud.js';
 
 const TIPS = [
   'Hit ramps at full speed for big stunt bonuses. Flips and perfect landings pay extra.',
@@ -13,12 +14,15 @@ const TIPS = [
   'Knocking over streetlights is great fun. The police disagree.',
   'Jump out of a moving car with F. It hurts a little.',
   'If your car lands on its roof, press R to flip it back over.',
+  'Blast Barn gun stores sell weapons, ammo and body armor. Walk in and press F at the counter.',
+  'At three stars the police stop asking nicely. Body armor helps.',
   'The Zentra R supercar is rare. Keep an eye out for it in parking spots.',
   'Press V to switch between near, far and hood cameras.',
 ];
 const CONTROLS = [
   ['On foot', [['W A S D', 'Move'], ['Shift', 'Sprint'], ['Space', 'Jump'], ['F / E', 'Enter or steal a car'], ['Mouse', 'Look around']]],
   ['Driving', [['W / S', 'Accelerate / brake & reverse'], ['A / D', 'Steer'], ['Space', 'Handbrake drift'], ['F / E', 'Exit (bail out at speed)'], ['H', 'Horn'], ['Q', 'Radio station'], ['V', 'Camera view'], ['C', 'Look behind'], ['R', 'Flip car upright'], ['W S A D in the air', 'Flip and roll']]],
+  ['Weapons', [['Left mouse', 'Punch / shoot'], ['Right mouse', 'Aim (over the shoulder)'], ['1-6 / wheel', 'Switch weapon'], ['R', 'Reload'], ['F at a counter', 'Shop at Blast Barn']]],
   ['General', [['M', 'Map + waypoint'], ['Esc / P', 'Pause menu'], ['Click', 'Capture the mouse']]],
 ];
 const OPTS = {
@@ -46,6 +50,8 @@ export class UI {
     this.buildControls($('#controlsList')); this.buildControls($('#pauseControls'));
     this.buildSettings($('#settingsList')); this.buildSettings($('#pauseSettings'));
     setInterval(() => this.nextTip(), 6500); this.nextTip();
+    $('#shopList').addEventListener('click', (e) => { const row = e.target.closest('.sRow'); if (!row) return; const r = this.g.weapons.buy(row.dataset.item); if (r !== 'ok') this.g.audio.uiBack(); this.renderShop(r === 'ok' ? 'Thanks for shopping at Blast Barn!' : r); });
+    $('#shopClose').addEventListener('click', () => this.g.closeShop());
   }
   nextTip() { this.tipI = (this.tipI + 1) % TIPS.length; for (const t of document.querySelectorAll('.tipText')) { t.classList.remove('in'); void t.offsetWidth; t.textContent = TIPS[this.tipI]; t.classList.add('in'); } }
   go(screen) {
@@ -88,6 +94,24 @@ export class UI {
     slider('fov', 'Field of view', 50, 80, 1, (v) => `${v}°`); pick('units', 'Speed units'); pick('showFps', 'Show FPS');
   }
   syncSettings(except) { for (const r of document.querySelectorAll('.setRow')) if (r !== except && r._upd) r._upd(); }
+
+  // ---------- gun store ----------
+  openShop() { $('#shop').classList.remove('hidden'); this.renderShop('What can I get you?'); }
+  closeShop() { $('#shop').classList.add('hidden'); }
+  renderShop(msg) {
+    const g = this.g, W = g.weapons; const rows = [];
+    const stat = (label, v) => `<span>${label}<i><em style="width:${Math.round(clamp(v, 0.04, 1) * 100)}%"></em></i></span>`;
+    for (const k of ['bat', 'pistol', 'smg', 'shotgun', 'rifle']) {
+      const w = WEAPONS[k]; const owned = W.owned[k]; let btn;
+      if (!owned) btn = `<div class="sBuy ${g.cash < w.price ? 'poor' : ''}">BUY<small>${fmtMoney(w.price)}</small></div>`;
+      else if (w.melee) btn = '<div class="sBuy owned">OWNED</div>';
+      else btn = `<div class="sBuy ammo ${g.cash < w.ammo[1] ? 'poor' : ''}">+${w.ammo[0]} AMMO<small>${fmtMoney(w.ammo[1])} · have ${W.ammo[k].mag + W.ammo[k].res}</small></div>`;
+      const dmg = (w.dmg * (w.pellets || 1)) / 115, rate = w.melee ? 0.25 : 0.026 / w.rate, range = w.melee ? 0.04 : w.range / 170;
+      rows.push(`<div class="sRow" data-item="${k}">${wsvg(k)}<div><b>${w.name}</b><p>${w.desc}</p><div class="sStats">${stat('DMG', dmg)}${stat('RATE', rate)}${stat('RANGE', range)}</div></div>${btn}</div>`);
+    }
+    rows.push(`<div class="sRow" data-item="armor"><svg viewBox="0 0 80 40" fill="#4ea8ff" stroke="#111" stroke-width="2.5"><path d="M40 3l18 5v11c0 9-8 15-18 18C30 34 22 28 22 19V8z"/></svg><div><b>Body Armor</b><p>Soaks up most of the damage from police gunfire.</p><div class="sStats"><span>ARMOR ${Math.round(W.armor)}/100</span></div></div><div class="sBuy ${W.armor >= 100 ? 'owned' : g.cash < ARMOR_PRICE ? 'poor' : ''}">${W.armor >= 100 ? 'FULL' : 'BUY'}<small>${fmtMoney(ARMOR_PRICE)}</small></div></div>`);
+    $('#shopList').innerHTML = rows.join(''); $('#shopCash').textContent = fmtMoney(g.cash); $('#shopMsg').textContent = msg || '';
+  }
 
   // ---------- pause menu ----------
   openPause(tab = 'map') { const p = $('#pause'); p.classList.remove('hidden'); this.tab(tab); this.header(); }

@@ -110,6 +110,25 @@ export class AudioEngine {
   garage() { this.burst(300, 2, 1.0, 0.25); this.tone(90, 'sawtooth', 0.9, 0.05); }
   stealAlarm(pos) { const a = this.att(pos); for (let i = 0; i < 6; i++) this.tone(i % 2 ? 1100 : 900, 'square', 0.12, 0.05 * a, i * 0.15); }
 
+  // ---------- weapons ----------
+  gun(kind, pos, vol = 1) {
+    const a = this.att(pos, 34) * vol; if (a < 0.02) return;
+    if (kind === 'shotgun') { this.burst(1100, 0.5, 0.32, 0.85 * a); this.burst(220, 0.8, 0.45, 0.8 * a); this.tone(68, 'sine', 0.32, 0.75 * a, 0, this.sfx, 34); }
+    else if (kind === 'rifle') { this.burst(3200, 0.6, 0.08, 0.55 * a, 'highpass'); this.burst(800, 0.7, 0.16, 0.55 * a); this.tone(105, 'sine', 0.12, 0.5 * a, 0, this.sfx, 50); }
+    else if (kind === 'smg') { this.burst(2600, 0.6, 0.06, 0.42 * a); this.burst(520, 0.6, 0.1, 0.38 * a); this.tone(150, 'sine', 0.07, 0.3 * a, 0, this.sfx, 70); }
+    else { this.burst(2000, 0.7, 0.11, 0.6 * a); this.burst(420, 0.6, 0.17, 0.5 * a); this.tone(125, 'sine', 0.12, 0.5 * a, 0, this.sfx, 55); }
+  }
+  hitBody(pos) { const a = this.att(pos, 20); this.burst(260, 1.2, 0.08, 0.45 * a); this.tone(95, 'sine', 0.08, 0.35 * a, 0, this.sfx, 60); }
+  ricochet(pos) { const a = this.att(pos, 18); this.tone(2200 + Math.random() * 1800, 'sine', 0.28, 0.06 * a, 0, this.sfx, 700 + Math.random() * 400); }
+  clank(pos) { const a = this.att(pos, 18); for (const f of [610, 930, 1460]) this.tone(f * (0.95 + Math.random() * 0.1), 'square', 0.09, 0.04 * a); }
+  whiz() { this.burst(3800, 3, 0.18, 0.12, 'bandpass'); }
+  swing(bat) { this.burst(bat ? 700 : 1300, 1.6, bat ? 0.22 : 0.12, bat ? 0.22 : 0.14, 'bandpass'); }
+  punchHit(hit, bat) { if (!hit) return; if (bat) { this.tone(160, 'triangle', 0.1, 0.4); this.burst(1800, 2, 0.06, 0.25, 'bandpass'); } else { this.burst(320, 1, 0.09, 0.5); this.tone(85, 'sine', 0.1, 0.45, 0, this.sfx, 55); } }
+  reload() { this.tone(900, 'square', 0.03, 0.07); this.tone(620, 'square', 0.04, 0.07, 0.28); this.burst(2500, 3, 0.05, 0.12, 'bandpass', 0.55); this.tone(1150, 'square', 0.03, 0.08, 0.75); }
+  empty() { this.tone(1600, 'square', 0.02, 0.06); }
+  equip() { this.burst(2200, 3, 0.05, 0.1, 'bandpass'); this.tone(500, 'square', 0.03, 0.05, 0.05); }
+  register() { this.tone(1568, 'triangle', 0.14, 0.14); this.tone(2093, 'triangle', 0.45, 0.14, 0.09); this.burst(5000, 1, 0.12, 0.1, 'highpass'); }
+
   // ---------- radio / menu music: generative synthwave ----------
   nextStation() { this.station = (this.station + 1) % 3; return ['RADIO OFF', 'NEON FM 88.1', 'BACKSTREET BEATS 99.4'][this.station]; }
   schedule() {

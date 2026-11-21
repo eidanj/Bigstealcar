@@ -71,6 +71,7 @@ export class HumanRenderer {
       _q.setFromAxisAngle(AX, -pitch); _q2.setFromAxisAngle(AZ, roll); _q.multiply(_q2);
       _p.makeRotationFromQuaternion(_q); _p.setPosition(side * 0.3, 0.57, 0); _m.multiplyMatrices(_tor, _p); M.arm.setMatrixAt(s * 2 + j, _m);
       _m.multiply(_p.makeTranslation(0, -0.62, 0)); M.hand.setMatrixAt(s * 2 + j, _m);
+      if (j === 1 && ch.handM) ch.handM.copy(_m);
     }
     // legs + shoes
     for (let j = 0; j < 2; j++) {
@@ -100,7 +101,7 @@ export class Character {
     this.pose = { torso: 0, head: 0, armL: 0, armR: 0, armLs: 0.06, armRs: 0.06, legL: 0, legR: 0, kneeL: 0, kneeR: 0, crouch: 0, legSpread: 0 };
     this.drawPos = new V3().copy(this.pos); this.drawQuat = new THREE.Quaternion().setFromAxisAngle(AY, yaw);
     this.rq = new THREE.Quaternion(); this.rAng = new V3(); this.downT = 0; this.dizzy = 0; this.panic = 0; this.radius = 0.3; this.health = 100; this.scale = 1;
-    this.anim = 'walk'; this.wave = 0; this.carT = null;
+    this.anim = 'walk'; this.wave = 0; this.carT = null; this.punchT = 0; this.punchDur = 0.34; this.aimPose = false; this.koT = 0;
     game.humans.add(this);
   }
   get standing() { return this.state === 'walk'; }
@@ -172,11 +173,11 @@ export class Character {
       const yawNow = Math.atan2(2 * (this.rq.w * this.rq.y + this.rq.x * this.rq.z), 1 - 2 * (this.rq.y * this.rq.y + this.rq.x * this.rq.x));
       _q.setFromAxisAngle(AY, yawNow); _q2.setFromAxisAngle(AX, -Math.PI / 2); _q.multiply(_q2);
       this.rq.slerp(_q, Math.min(1, dt * 6)); this.pos.y = damp(this.pos.y, world.ground(this.pos.x, this.pos.z) + 0.14, 10, dt);
-      if (this.downT > 2.6) { this.state = 'getup'; this.downT = 0; this.yaw = yawNow; }
+      if (this.downT > (this.koT || 2.6)) { this.state = 'getup'; this.downT = 0; this.yaw = yawNow; }
     } else if (this.state === 'getup') {
       this.downT += dt; _q.setFromAxisAngle(AY, this.yaw); this.rq.slerp(_q, Math.min(1, dt * 5));
       this.pos.y = damp(this.pos.y, world.ground(this.pos.x, this.pos.z) + 0.9, 8, dt);
-      if (this.downT > 0.7) { this.state = 'walk'; this.dizzy = 2.4; this.vel.set(0, 0, 0); this.onGround = true; this.pos.y = world.ground(this.pos.x, this.pos.z); }
+      if (this.downT > 0.7) { this.state = 'walk'; this.dizzy = this.koT ? 4 : 2.4; this.koT = 0; this.health = this.cop ? 90 : 60; this.vel.set(0, 0, 0); this.onGround = true; this.pos.y = world.ground(this.pos.x, this.pos.z); }
     }
   }
   // ---- animation ----
@@ -194,7 +195,20 @@ export class Character {
         torso: run * 0.22 + (this.dizzy > 0 ? Math.sin(this.phase * 0.7 + this.dizzy * 3) * 0.12 : 0), head: this.dizzy > 0 ? Math.sin(this.dizzy * 5) * 0.4 : 0, crouch: 0, legSpread: 0,
       };
       if (this.wave > 0) { this.wave -= dt; tgt.armR = 2.9; tgt.armRs = 0.3 + Math.sin(this.wave * 14) * 0.25; }
-      for (const k in tgt) P[k] = damp(P[k], tgt[k], 14, dt);
+      let rate = 14;
+      if (this.aimPose) { // gun raised toward the crosshair
+        tgt.armR = Math.PI / 2 + (this.aimPitch || 0); tgt.armRs = -0.06; tgt.torso = 0.04;
+        if (this.twoHand) { tgt.armL = Math.PI / 2 - 0.12 + (this.aimPitch || 0); tgt.armLs = -0.62; } else { tgt.armL = 0.25; tgt.armLs = 0.1; }
+        rate = 22;
+      }
+      if (this.punchT > 0) { // quick jab (alternating arms) or a two-handed bat swing
+        const k = 1 - this.punchT / this.punchDur; const sw = Math.sin(Math.min(1, k * 1.6) * Math.PI);
+        if (this.punchDur > 0.45) { tgt.armR = 1.0 + sw * 0.9; tgt.armL = 1.0 + sw * 0.9; tgt.armRs = -0.5 + sw * 0.9; tgt.armLs = -0.7 + sw * 0.6; }
+        else if (this.punchArm) { tgt.armR = 0.3 + sw * 1.35; tgt.armRs = 0.05; tgt.armL = 0.9; tgt.armLs = -0.2; }
+        else { tgt.armL = 0.3 + sw * 1.35; tgt.armLs = 0.05; tgt.armR = 0.9; tgt.armRs = -0.2; }
+        tgt.torso = 0.08 + sw * 0.12; rate = 34;
+      }
+      for (const k in tgt) P[k] = damp(P[k], tgt[k], rate, dt);
       // gentle body bob
       this.drawPos.copy(this.pos); this.drawPos.y += Math.abs(Math.cos(this.phase)) * 0.04 * clamp(sp / 2, 0, 1);
       this.drawQuat.setFromAxisAngle(AY, this.yaw);

@@ -103,3 +103,15 @@ export const DEFAULT_SETTINGS = {
   quality: 'high', time: 'dynamic', dayMinutes: 24, volume: 0.8, music: 0.45, sfx: 1,
   sens: 1, invertY: false, units: 'mph', fov: 62, showFps: false, radio: true,
 };
+
+// Weapons (teen rating: hits knock people out, nobody gets hurt for real). dmg is per bullet/pellet against 100 health.
+export const WEAPONS = {
+  fists: { name: 'Fists', key: 'fists', slot: 1, melee: true, dmg: 24, range: 1.5, rate: 0.42, price: 0 },
+  bat: { name: 'Baseball Bat', key: 'bat', slot: 2, melee: true, dmg: 48, range: 2.0, rate: 0.62, price: 150, desc: 'Home-run swing. Knocks props flying.' },
+  pistol: { name: 'Pistol', key: 'pistol', slot: 3, dmg: 28, rate: 0.26, spread: 0.012, range: 130, mag: 12, start: 48, ammo: [24, 60], price: 350, auto: false, desc: 'Reliable sidearm. 12-round magazine.' },
+  smg: { name: 'SMG', key: 'smg', slot: 4, dmg: 15, rate: 0.075, spread: 0.032, range: 90, mag: 30, start: 120, ammo: [60, 90], price: 900, auto: true, desc: 'Sprays fast. Great up close.' },
+  shotgun: { name: 'Pump Shotgun', key: 'shotgun', slot: 5, dmg: 14, pellets: 8, rate: 0.85, spread: 0.075, range: 45, mag: 6, start: 24, ammo: [12, 80], price: 1250, auto: false, desc: 'Eight pellets per shell. Short range.' },
+  rifle: { name: 'Assault Rifle', key: 'rifle', slot: 6, dmg: 25, rate: 0.11, spread: 0.014, range: 170, mag: 30, start: 120, ammo: [60, 140], price: 2200, auto: true, desc: 'Accurate and full-auto. The big one.' },
+};
+export const WEAPON_ORDER = ['fists', 'bat', 'pistol', 'smg', 'shotgun', 'rifle'];
+export const ARMOR_PRICE = 250;

@@ -13,9 +13,14 @@ export class Input {
     addEventListener('keyup', (e) => this.keys.delete(e.code));
     addEventListener('blur', () => this.keys.clear());
     addEventListener('mousemove', (e) => { if (this.locked) { this.mdx += e.movementX; this.mdy += e.movementY; } else if (e.buttons & 2 || e.buttons & 1 && this.dragLook) { this.mdx += e.movementX; this.mdy += e.movementY; } });
-    addEventListener('mousedown', (e) => { if (e.button === 0) this.hits.add('Mouse0'); });
+    this.wheel = 0;
+    const mkey = (b) => (b === 0 ? 'Mouse0' : b === 2 ? 'Mouse2' : null);
+    // mouse buttons only count while the pointer is captured (the click that captures it is not a shot)
+    addEventListener('mousedown', (e) => { const k = mkey(e.button); if (k && this.locked) { this.keys.add(k); this.hits.add(k); } });
+    addEventListener('mouseup', (e) => { const k = mkey(e.button); if (k) this.keys.delete(k); });
+    addEventListener('wheel', (e) => { if (this.locked) this.wheel += Math.sign(e.deltaY); }, { passive: true });
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    document.addEventListener('pointerlockchange', () => { this.locked = document.pointerLockElement === canvas; });
+    document.addEventListener('pointerlockchange', () => { this.locked = document.pointerLockElement === canvas; if (!this.locked) { this.keys.delete('Mouse0'); this.keys.delete('Mouse2'); } });
     this.setupTouch();
   }
   lock() { if (!this.touch && this.canvas.requestPointerLock && !this.locked) { try { const p = this.canvas.requestPointerLock(); if (p && p.catch) p.catch(() => {}); } catch (e) { /* ignore */ } } }

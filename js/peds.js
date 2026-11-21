@@ -27,7 +27,7 @@ export class Peds {
       const x = ax + (bx - ax) * u, z = az + (bz - az) * u; const d = Math.hypot(x - f.x, z - f.z);
       if (d < minD || d > maxD) continue; if (g.inView(x, z, 2) && d < 110) continue;
       const ch = new Character(g, randomLook(), x, z, 0); if (ch.slot == null) { ch.dispose(); return null; }
-      ch.brain = { block: b, target: cj, dir: 1, mode: 'walk', speed: R.range(1.15, 1.6), wait: 0 };
+      ch.brain = { block: b, target: cj, dir: 1, mode: 'walk', speed: R.range(1.15, 1.6), wait: 0 }; ch.health = 60;
       if (Math.random() < 0.5) { ch.brain.dir = -1; ch.brain.target = ci; }
       this.list.push(ch); return ch;
     }
@@ -35,7 +35,7 @@ export class Peds {
   }
   adopt(ch, panic = 4) { // a car-jacked driver becomes a pedestrian
     const b = this.nearestBlock(ch.pos.x, ch.pos.z); ch.state = 'walk'; ch.visible = true; ch.scale = 1; ch.pos.y = this.game.world.ground(ch.pos.x, ch.pos.z);
-    ch.brain = { block: b, target: 0, dir: 1, mode: 'return', speed: R.range(1.2, 1.6), wait: 0 }; ch.panic = panic; this.list.push(ch); return ch;
+    ch.brain = { block: b, target: 0, dir: 1, mode: 'return', speed: R.range(1.2, 1.6), wait: 0 }; ch.panic = panic; ch.health = 60; ch.cop = false; this.list.push(ch); return ch;
   }
   nearestBlock(x, z) { const i = clamp(Math.floor((x + CITY.HALF) / P), 0, NB - 1), j = clamp(Math.floor((z + CITY.HALF) / P), 0, NB - 1); return this.game.world.blocks[j * NB + i]; }
   remove(ch) { const i = this.list.indexOf(ch); if (i >= 0) this.list.splice(i, 1); ch.dispose(); }
@@ -116,9 +116,11 @@ export class Peds {
       const lx = dx * car.left.x + dz * car.left.z, lz = dx * car.fwd.x + dz * car.fwd.z; const r = 0.32;
       if (Math.abs(lx) > car.ex + r || Math.abs(lz) > car.ez + r) continue;
       const footY = ch.state === 'ragdoll' ? ch.pos.y - 0.9 : ch.pos.y; if (footY > car.pos.y - car.comH + car.type.H - 0.2) continue; // standing on the roof
-      // point velocity of the car at the person
-      _v.crossVectors(car.angVel, _w.set(dx, 0, dz)).add(car.vel); const rel = Math.hypot(_v.x - ch.vel.x, _v.z - ch.vel.z);
-      if (rel > 2.6 && ch.state === 'walk') {
+      // point velocity of the car at the person. Only a car that is itself moving INTO the person knocks them over —
+      // walking or sprinting into a parked car just bumps you off it.
+      _v.crossVectors(car.angVel, _w.set(dx, 0, dz)).add(car.vel); const rel = Math.hypot(_v.x, _v.z);
+      const dl = Math.hypot(dx, dz) || 1; const approach = (_v.x * dx + _v.z * dz) / dl;
+      if (!car.sleeping && rel > 3.2 && approach > 2.2 && ch.state === 'walk') {
         const side = Math.sign(lx || 1) * 1.5; const kick = new V3(_v.x * 1.05 + car.left.x * side, 1.6 + rel * 0.26, _v.z * 1.05 + car.left.z * side);
         ch.knock(kick, 1); car.vel.multiplyScalar(0.985);
         g.onPersonHit(ch, car, rel);
@@ -135,26 +137,39 @@ export class Peds {
     const g = this.game; const look = { skin: R.pick(SKIN), hair: 0x101830, shirt: 0x1b2a4a, pants: 0x121a2e, shoes: 0x111111, sleeve: 0x1b2a4a };
     const x = car.pos.x + car.left.x * (car.ex + 0.6), z = car.pos.z + car.left.z * (car.ex + 0.6);
     const ch = new Character(g, look, x, z, car.yaw); if (ch.slot == null) { ch.dispose(); return null; }
-    ch.cop = true; ch.car = car; ch.brain = { mode: 'chase', speed: 4.9 }; this.cops.push(ch); car.officer = ch; return ch;
+    ch.cop = true; ch.car = car; ch.health = 90; ch.brain = { mode: 'chase', speed: 4.9 }; this.cops.push(ch); car.officer = ch; return ch;
   }
   updateCops(dt) {
-    const g = this.game;
+    const g = this.game, W = g.world;
     for (const ch of [...this.cops]) {
-      if (ch.state !== 'walk') { ch.physicsRagdoll(dt); ch.animate(dt); this.carHits(ch); continue; }
-      const car = ch.car; let tx, tz; let sp = ch.brain.speed;
-      const back = !!g.playerCar || g.wanted.stars === 0 || !car || car.dead || !g.cars.includes(car);
-      if (!back) { const p = g.player.char.pos; tx = p.x; tz = p.z; }
-      else if (car && g.cars.includes(car)) { tx = car.pos.x + car.left.x * (car.ex + 0.5); tz = car.pos.z + car.left.z * (car.ex + 0.5); }
-      else { this.removeCop(ch); continue; }
-      const dx = tx - ch.pos.x, dz = tz - ch.pos.z; const d = Math.hypot(dx, dz);
-      if (back && d < 1.2) { this.removeCop(ch); continue; }
-      const wish = _w.set(0, 0, 0);
-      if (d > 0.9) { wish.set(dx / d * sp, 0, dz / d * sp); ch.faceToward(dx, dz, dt, 12); }
+      if (ch.state !== 'walk') { ch.aimPose = false; ch.physicsRagdoll(dt); ch.animate(dt); this.carHits(ch); continue; }
+      const car = ch.car && g.cars.includes(ch.car) && !ch.car.dead ? ch.car : null; const pc = g.player.char; const pp = pc.pos;
+      const chase = !g.playerCar && g.wanted.stars > 0 && pc.state === 'walk' && g.state === 'play';
+      let tx, tz, sp = ch.brain.speed; const wish = _w.set(0, 0, 0); ch.aimPose = false;
+      if (chase) {
+        const dx = pp.x - ch.pos.x, dz = pp.z - ch.pos.z; const d = Math.hypot(dx, dz);
+        const shooting = g.wanted.stars >= 3 || ch.aggro;
+        if (shooting) {
+          if (!ch.gun) { ch.gun = g.weapons.takeCopGun(); if (!ch.handM) ch.handM = new THREE.Matrix4(); }
+          const los = d < 42 && W.raycast(ch.pos.x, 1.45, ch.pos.z, pp.x, 1.45, pp.z) >= 1;
+          if (los && d < 17) { // hold position and open fire
+            ch.faceToward(dx, dz, dt, 14); ch.aimPose = true; ch.aimPitch = 0; ch.twoHand = false;
+            ch.shootT = (ch.shootT ?? 0.7) - dt;
+            if (ch.shootT <= 0) { ch.shootT = 0.75 + Math.random() * 0.7; const acc = clamp(0.55 - d * 0.018 - pc.speed * 0.035, 0.08, 0.55); g.weapons.npcShoot(g.weapons.muzzlePos(ch, ch.gun), acc, 7); }
+          } else { wish.set(dx / (d || 1) * sp, 0, dz / (d || 1) * sp); ch.faceToward(dx, dz, dt, 12); }
+        } else {
+          if (d > 0.9) { wish.set(dx / d * sp, 0, dz / d * sp); ch.faceToward(dx, dz, dt, 12); }
+          if (d < 1.4) { g.bustProgress(dt); ch.wave = 0.3; }
+        }
+      } else if (car) { // head back to the cruiser
+        tx = car.pos.x + car.left.x * (car.ex + 0.5); tz = car.pos.z + car.left.z * (car.ex + 0.5); const dx = tx - ch.pos.x, dz = tz - ch.pos.z; const d = Math.hypot(dx, dz);
+        if (d < 1.2) { this.removeCop(ch); continue; }
+        wish.set(dx / d * sp, 0, dz / d * sp); ch.faceToward(dx, dz, dt, 12);
+      } else { ch.lostT = (ch.lostT || 0) + dt; if (ch.lostT > 25 || !g.inView(ch.pos.x, ch.pos.z, 2)) { this.removeCop(ch); continue; } }
       ch.move(dt, wish, false, 14); ch.animate(dt); this.carHits(ch);
-      if (!back && d < 1.4 && g.player.char.state === 'walk') { g.bustProgress(dt); ch.wave = 0.3; }
       if (Math.hypot(ch.pos.x - g.focus.x, ch.pos.z - g.focus.z) > 200) this.removeCop(ch);
     }
   }
-  removeCop(ch) { const i = this.cops.indexOf(ch); if (i >= 0) this.cops.splice(i, 1); if (ch.car && ch.car.officer === ch) ch.car.officer = null; ch.dispose(); }
+  removeCop(ch) { const i = this.cops.indexOf(ch); if (i >= 0) this.cops.splice(i, 1); ch.gun = null; if (ch.car && ch.car.officer === ch) ch.car.officer = null; ch.dispose(); }
   clear() { for (const ch of [...this.list]) this.remove(ch); for (const c of [...this.cops]) this.removeCop(c); }
 }

@@ -40,10 +40,16 @@ export class CameraRig {
     } else {
       const ch = g.player.char; this.mode = 'foot';
       this.yaw -= mx * sens; this.pitch = clamp(this.pitch + my * sens, -0.55, 1.2);
-      const dist = 4.4; const base = ch.state === 'walk' ? ch.pos : ch.drawPos;
-      look.set(base.x, base.y + 1.55, base.z);
-      const rx = -Math.cos(this.yaw), rz = Math.sin(this.yaw); look.x += rx * 0.45; look.z += rz * 0.45;
+      const base = ch.state === 'walk' ? ch.pos : ch.drawPos;
+      const Wp = g.weapons; const aim = !!Wp && !Wp.w.melee && ch.state === 'walk' && (Wp.aiming || g.t - Wp.lastShot < 0.7);
+      const inside = W.interiorAt(base.x, base.z);
+      this.footDist = damp(this.footDist ?? 4.4, aim ? 2.3 : inside ? 3.0 : 4.4, 9, dt); this.shoulder = damp(this.shoulder ?? 0.45, aim ? 0.78 : 0.45, 9, dt);
+      const dist = this.footDist;
+      look.set(base.x, base.y + (aim ? 1.6 : 1.55), base.z);
+      const rx = -Math.cos(this.yaw), rz = Math.sin(this.yaw); look.x += rx * this.shoulder; look.z += rz * this.shoulder;
       desired.set(look.x - Math.sin(this.yaw) * Math.cos(this.pitch) * dist, look.y + Math.sin(this.pitch) * dist, look.z - Math.cos(this.yaw) * Math.cos(this.pitch) * dist);
+      if (inside) desired.y = Math.min(desired.y, inside.roofY - 0.45);
+      if (aim) fov -= Wp.aiming ? 14 : 6;
     }
     if (g.cinematic === 'busted' || g.cinematic === 'ko') { // slow orbit around the scene
       const c = g.focus; const a = this.t * 0.35; desired.set(c.x + Math.cos(a) * 9, c.y + 5, c.z + Math.sin(a) * 9); look.set(c.x, c.y + 0.8, c.z);

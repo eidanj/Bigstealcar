@@ -24,13 +24,16 @@
       <div id="cash">$0</div>
       <div id="cashDelta"></div>
       <div id="stars"><i>★</i><i>★</i><i>★</i><i>★</i><i>★</i></div>
+      <div id="weaponBox"><span id="wIcon"></span><b id="wAmmo"></b></div>
     </div>
+    <div id="crosshair" class="hidden"><i class="t"></i><i class="b"></i><i class="l"></i><i class="r"></i><em></em></div>
+    <div id="hitmark"></div>
     <div id="helpBox" class="hidden"></div>
     <div id="missionTop"><div id="timer"></div></div>
     <div id="countdown"></div>
     <div id="objective"></div>
     <div id="minimap"><canvas id="mapCanvas"></canvas>
-      <div class="bars"><div id="hpBar" class="bar"><i></i></div><div id="carBar" class="bar car"><i></i></div></div>
+      <div class="bars"><div id="hpBar" class="bar"><i></i></div><div id="armorBar" class="bar armor"><i></i></div><div id="carBar" class="bar car"><i></i></div></div>
     </div>
     <div id="speedo" class="hidden"><canvas id="speedCanvas"></canvas></div>
     <div id="vehName"></div>
@@ -52,12 +55,24 @@
       <button data-key="KeyF" class="tb big enter">F</button>
       <button data-key="Space" class="tb">JUMP<br>DRIFT</button>
       <button data-key="ShiftLeft" class="tb foot">RUN</button>
+      <button data-key="Mouse0" class="tb foot fire">FIRE</button>
+      <button data-key="KeyX" class="tb sm foot">WEAPON</button>
       <button data-key="KeyH" class="tb car">HORN</button>
       <button data-key="KeyV" class="tb sm">CAM</button>
       <button data-key="KeyR" class="tb sm car">FLIP</button>
       <button data-key="KeyQ" class="tb sm car">RADIO</button>
     </div>
     <button data-key="Escape" class="tb pauseBtn">❚❚</button>
+  </div>
+
+  <!-- ================= GUN STORE ================= -->
+  <div id="shop" class="hidden">
+    <div class="shopPanel">
+      <div class="shopHead"><div class="shopLogo">BLAST BARN</div><div class="shopSub">GUNS · AMMO · ARMOR</div><div class="shopCash" id="shopCash"></div></div>
+      <div class="shopList" id="shopList"></div>
+      <div class="shopMsg" id="shopMsg"></div>
+      <div class="shopFoot"><span><kbd>Click</kbd> buy &nbsp; <kbd>Esc</kbd> leave</span><button id="shopClose">LEAVE COUNTER</button></div>
+    </div>
   </div>
 
   <!-- ================= PAUSE (GTA style) ================= -->
@@ -71,7 +86,7 @@
     </div>
     <div class="pBody">
       <div class="pane" data-pane="map"><canvas id="fullMap"></canvas><div class="mapSide"><h4>LEGEND</h4>
-        <p><i style="background:#ffd60a">R</i> Race</p><p><i style="background:#38d39f">S</i> Stunt jump</p><p><i style="background:#ff4d6d">G</i> Getaway</p><p><i style="background:#7bdff2">S</i> Pay &amp; Spray</p><p><i style="background:#ffd23f">★</i> Star reset</p><p><i style="background:#2ecc71">♥</i> Health</p><p><i style="background:#4361ee">P</i> Police station</p><p><i style="background:#f8f9fa">+</i> Hospital</p>
+        <p><i style="background:#ffd60a">R</i> Race</p><p><i style="background:#38d39f">S</i> Stunt jump</p><p><i style="background:#ff4d6d">G</i> Getaway</p><p><i style="background:#7bdff2">S</i> Pay &amp; Spray</p><p><i style="background:#ffd23f">★</i> Star reset</p><p><i style="background:#2ecc71">♥</i> Health</p><p><i style="background:#ff8c42">A</i> Blast Barn (guns)</p><p><i style="background:#4361ee">P</i> Police station</p><p><i style="background:#f8f9fa">+</i> Hospital</p>
         <p class="dim">Click the map to set a GPS waypoint.</p><button id="clearWp" class="ghost">Clear waypoint</button></div></div>
       <div class="pane" data-pane="missions"><div id="pauseMissions" class="mList"></div></div>
       <div class="pane" data-pane="stats"><div id="statsList"></div></div>

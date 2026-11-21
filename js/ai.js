@@ -85,9 +85,11 @@ export class TrafficDriver {
     if (this.path.lat > 14) { this.lostT += dt; if (this.lostT > 1.5) { this.reroute(); this.lostT = 0; } } else this.lostT = 0;
     let target = this.cruise * (car.type.cls === 'Van' ? 0.85 : 1);
     if (this.path.flags[this.path.seg + 1] || this.path.flags[this.path.seg + 2]) target = Math.min(target, 7.5);
+    // spooked by gunfire: floor it and ignore the lights for a while
+    if (this.panicT > 0) { this.panicT -= dt; target = this.cruise * 1.75; if (Math.random() < dt * 0.6) g.audio.honk(car.pos, 0.6); }
     // traffic light at the stop line of the current road
     const dStop = this.path.remainingTo(this.path.stopIdx, x, z);
-    if (dStop > -1 && dStop < 45) {
+    if (dStop > -1 && dStop < 45 && !(this.panicT > 0)) {
       const st = W.lightState(this.b[0], this.b[1], this.axis);
       if (st === 'r' || (st === 'y' && dStop > 10)) target = Math.min(target, Math.sqrt(Math.max(0, dStop - 1.5) * 2 * 4.2));
     }
@@ -164,6 +166,8 @@ export class PoliceDriver {
       else if (pv < 4) { target = Math.sqrt(Math.max(0, 2 * 6 * (dist - 5.5))); aimX = tgt.x + tgt.lx * Math.sign(this.offset || 1) * 3.2; aimZ = tgt.z + tgt.lz * Math.sign(this.offset || 1) * 3.2; } // pull up alongside and box them in
       else target = Math.min(car.type.vmax, Math.sqrt((pv + 8) * (pv + 8) + 2 * 7 * Math.max(0, dist - 10))); // catch up, then ram
       this.path.set([]); this.repath = 0;
+      // 4+ stars: the passenger leans out and shoots
+      if (g.wanted.stars >= 4 && dist < 32 && los && g.state === 'play') { this.shootT = (this.shootT ?? 1.2) - dt; if (this.shootT <= 0) { this.shootT = 1.0 + Math.random() * 0.9; const from = car.pos.clone().addScaledVector(car.left, -(car.ex + 0.15)).addScaledVector(car.up, 0.75); g.weapons.npcShoot(from, onFoot ? 0.32 : 0.28, 6); } }
     } else {
       if (this.repath <= 0 || this.path.pts.length < 2) { this.repath = 1.4; this.buildPath(tgt); }
       [aimX, aimZ] = this.path.track(car.pos.x, car.pos.z, 7 + Math.abs(v) * 0.45);

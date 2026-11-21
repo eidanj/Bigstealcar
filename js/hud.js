@@ -15,6 +15,17 @@ export function fmt(s) { // GTA-style colour codes: ~y~ yellow, ~g~ green, ~r~ r
   if (open) out += '</span>'; return out;
 }
 
+// weapon silhouettes (white with dark outline) for the HUD and the store
+export const WICON = {
+  fists: '<path d="M24 8h24a6 6 0 0 1 6 6v4h4a6 6 0 0 1 0 12h-6l-4 6H26a8 8 0 0 1-8-8V14a6 6 0 0 1 6-6z"/>',
+  bat: '<path d="M6 21l60-9c6-1 9 2 9 5s-3 6-9 5L6 25c-3 0-3-4 0-4z"/>',
+  pistol: '<path d="M14 8h52v9H40l-2 3h-8l-4 14H14l4-14h-4z"/>',
+  smg: '<path d="M8 10h56v4h8v5H64v4H44l-4 12h-8l2-12h-6l-3 10h-8l3-10H8z"/>',
+  shotgun: '<path d="M4 15l18-2h52v6H40v3H30l-6 3H8l-4-2z"/>',
+  rifle: '<path d="M4 15l12-3h12l2-4h12l2 4h28v5h-6v3H50l-4 13h-8l2-13H30l-6 5H8l-4-2z"/>',
+};
+export const wsvg = (k) => `<svg viewBox="0 0 80 40" fill="#fff" stroke="#111" stroke-width="2.5" stroke-linejoin="round">${WICON[k] || ''}</svg>`;
+
 export class HUD {
   constructor(game) {
     this.g = game; this.el = $('#hud');
@@ -25,6 +36,7 @@ export class HUD {
     this.mapC = $('#mapCanvas'); this.mctx = this.mapC.getContext('2d'); this.spC = $('#speedCanvas'); this.sctx = this.spC.getContext('2d');
     this.shownCash = 0; this.helpT = 0; this.area = ''; this.areaT = 0; this.vehT = 0; this.bigT = 0; this.cardT = 0; this.stuntT = 0; this.radioT = 0; this.cdT = 0; this.flash = 0;
     this.waypoint = null; this.routeCache = null; this.routeT = 0;
+    this.wIcon = $('#wIcon'); this.wAmmo = $('#wAmmo'); this.wBox = $('#weaponBox'); this.cross = $('#crosshair'); this.hitEl = $('#hitmark'); this.armorBar = $('#armorBar i'); this._wk = '';
     this.resize(); addEventListener('resize', () => this.resize());
   }
   resize() {
@@ -58,10 +70,6 @@ export class HUD {
     // road centre lines
     x.strokeStyle = 'rgba(255,255,255,0.18)'; x.lineWidth = 1;
     for (let i = 0; i <= NB; i++) { const v = i * P - HALF; x.beginPath(); x.moveTo(X(-HALF), X(v)); x.lineTo(X(HALF), X(v)); x.stroke(); x.beginPath(); x.moveTo(X(v), X(-HALF)); x.lineTo(X(v), X(HALF)); x.stroke(); }
-    // district labels
-    x.font = 'bold 26px Oswald, Arial'; x.textAlign = 'center'; x.fillStyle = 'rgba(255,255,255,0.6)'; x.strokeStyle = 'rgba(0,0,0,0.5)'; x.lineWidth = 4;
-    const labels = [['CENTRAL SPIRE', 0, 0], ['MIDTOWN', 0, -260], ['SUNSET HEIGHTS', -300, -60], ['RUSTWATER', 300, -120], ['PORT BELLMONT', 0, 300], ['STUNT YARD', 264, -264]];
-    for (const [t, lx, lz] of labels) { x.strokeText(t, X(lx), X(lz)); x.fillText(t, X(lx), X(lz)); }
   }
 
   // ---------- per-frame ----------
@@ -87,15 +95,29 @@ export class HUD {
     // health bars
     this.hpBar.style.width = `${clamp(g.player.health, 0, 100)}%`; this.hpBar.parentElement.classList.toggle('low', g.player.health < 30);
     const car = g.playerCar; this.carBar.parentElement.style.opacity = car ? 1 : 0.25; this.carBar.style.width = car ? `${car.health / 10}%` : '0%';
+    const W = g.weapons; this.armorBar.style.width = `${clamp(W.armor, 0, 100)}%`; this.armorBar.parentElement.style.opacity = W.armor > 0 ? 1 : 0.25;
+    // crosshair + weapon readout
+    const foot = !car && g.player.char.state === 'walk'; const gun = !W.w.melee;
+    this.cross.classList.toggle('hidden', !foot || g.cinematic); this.cross.classList.toggle('melee', !gun);
+    if (gun) this.cross.style.setProperty('--g', `${6 + (W.bloom * 22 + (g.player.char.speed > 1 ? 5 : 0)) * (W.aiming ? 0.6 : 1)}px`);
+    this.weapon();
     this.clockEl.textContent = g.env.clock();
     // area name on district change
     const area = g.world.district(g.focus.x, g.focus.z); if (area !== this.area) { this.area = area; this.areaEl.textContent = area; this.areaT = 4; }
     const mode = car ? 'car' : 'foot'; if (mode !== this.mode) { this.mode = mode; this.modeT = 7; const h = document.getElementById('modeHint');
       h.innerHTML = car ? fmt('<b>DRIVING</b> [W][S] gas / brake · [A][D] steer · [Space] drift · [F] exit · [H] horn · [Q] radio · [V] camera · [M] map')
-        : fmt('<b>ON FOOT</b> [W][A][S][D] move · [Shift] sprint · [Space] jump · [F] steal a car · [M] map · [Esc] pause'); h.classList.remove('faded'); }
+        : fmt('<b>ON FOOT</b> [W][A][S][D] move · [Shift] sprint · [Space] jump · [F] steal a car · [LMB] punch / shoot · [RMB] aim · [1]-[6] weapons · [M] map'); h.classList.remove('faded'); }
     if (this.modeT > 0) { this.modeT -= dt; if (this.modeT <= 0) document.getElementById('modeHint').classList.add('faded'); }
     this.drawMinimap(); if (car) this.drawSpeedo(car); this.spC.parentElement.classList.toggle('hidden', !car);
   }
+  weapon(flash) {
+    const W = this.g.weapons; const k = W.cur; const a = W.ammo[k]; const key = k + (a ? `${a.mag}/${a.res}` : '') + (W.reloadT > 0 ? 'r' : '');
+    if (key === this._wk && !flash) return; this._wk = key;
+    if (this.wIcon.dataset.k !== k) { this.wIcon.innerHTML = wsvg(k); this.wIcon.dataset.k = k; }
+    this.wAmmo.innerHTML = a ? (W.reloadT > 0 ? '<small>RELOADING</small>' : `${a.mag}<small> / ${a.res}</small>`) : '';
+    if (flash) { this.wBox.classList.remove('flash'); void this.wBox.offsetWidth; this.wBox.classList.add('flash'); }
+  }
+  hitMarker(head) { this.hitEl.classList.toggle('head', !!head); this.hitEl.classList.remove('show'); void this.hitEl.offsetWidth; this.hitEl.classList.add('show'); }
   help(text, t = 3) { if (this.helpText !== text || this.helpEl.classList.contains('hidden')) { this.helpEl.innerHTML = fmt(text); this.helpText = text; } this.helpEl.classList.remove('hidden'); this.helpT = Math.max(this.helpT, t); }
   prompt(text) { if (text) { const h = fmt(text); if (this.promptEl.innerHTML !== h) this.promptEl.innerHTML = h; this.promptEl.classList.add('show'); } else this.promptEl.classList.remove('show'); }
   objective(t) { this.objEl.innerHTML = fmt(t || ''); }
@@ -140,6 +162,7 @@ export class HUD {
     const icon = (col, letter, r = 7) => (cx2) => { cx2.fillStyle = col; cx2.strokeStyle = '#111'; cx2.lineWidth = 1.5; cx2.beginPath(); cx2.arc(0, 0, r, 0, 7); cx2.fill(); cx2.stroke(); cx2.fillStyle = '#111'; cx2.font = `bold ${r * 1.3}px Arial`; cx2.textAlign = 'center'; cx2.textBaseline = 'middle'; cx2.fillText(letter, 0, 1); };
     for (const s of g.world.specials.spray || []) blip(s.x, s.z, icon('#7bdff2', 'S', 6), false);
     if (g.world.specials.police) blip(g.world.specials.police.x, g.world.specials.police.z, icon('#4361ee', 'P', 6), false);
+    for (const st of g.world.specials.stores || []) blip(st.x, st.z, icon('#ff8c42', 'A', 6), false);
     if (g.world.specials.hospital) blip(g.world.specials.hospital.x, g.world.specials.hospital.z, icon('#f8f9fa', '+', 6), false);
     for (const it of g.pickups.blips) blip(it.x, it.z, it.kind === 'star' ? icon('#ffd23f', '★', 6) : icon('#2ecc71', '♥', 5), false);
     for (const m of g.missions.blips) blip(m.x, m.z, icon(m.type === 'race' ? '#ffd60a' : m.type === 'stunt' ? '#38d39f' : '#ff4d6d', m.type[0].toUpperCase()));
@@ -205,9 +228,12 @@ export class HUD {
     const ic = (wx, wz, col, letter, r = 8) => { const [px, py] = M(wx, wz); x.fillStyle = col; x.strokeStyle = '#111'; x.lineWidth = 2; x.beginPath(); x.arc(px, py, r, 0, 7); x.fill(); x.stroke(); x.fillStyle = '#111'; x.font = `bold ${r * 1.25}px Arial`; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(letter, px, py + 1); };
     for (const s2 of g.world.specials.spray || []) ic(s2.x, s2.z, '#7bdff2', 'S');
     if (g.world.specials.police) ic(g.world.specials.police.x, g.world.specials.police.z, '#4361ee', 'P');
+    for (const st of g.world.specials.stores || []) ic(st.x, st.z, '#ff8c42', 'A');
     if (g.world.specials.hospital) ic(g.world.specials.hospital.x, g.world.specials.hospital.z, '#f8f9fa', '+');
     for (const it of g.pickups.blips) ic(it.x, it.z, it.kind === 'star' ? '#ffd23f' : '#2ecc71', it.kind === 'star' ? '★' : '♥', 6);
     for (const m of g.missions.list) { ic(m.start[0], m.start[1], m.type === 'race' ? '#ffd60a' : m.type === 'stunt' ? '#38d39f' : '#ff4d6d', m.type[0].toUpperCase(), 10); const [px, py] = M(m.start[0], m.start[1]); x.fillStyle = '#fff'; x.font = '600 12px Oswald, Arial'; x.fillText(m.name + (g.save.done[m.id] ? ' ✓' : ''), px, py + 20); }
+    x.font = `bold ${Math.round(s * 0.024)}px Oswald, Arial`; x.textAlign = 'center'; x.fillStyle = 'rgba(255,255,255,0.6)'; x.strokeStyle = 'rgba(0,0,0,0.5)'; x.lineWidth = 3;
+    for (const [t, lx, lz] of [['CENTRAL SPIRE', 0, 0], ['MIDTOWN', 0, -260], ['SUNSET HEIGHTS', -300, -60], ['RUSTWATER', 300, -120], ['PORT BELLMONT', 0, 300], ['STUNT YARD', 264, -264]]) { const [px, py] = M(lx, lz); x.strokeText(t, px, py); x.fillText(t, px, py); }
     if (this.waypoint) { const [px, py] = M(...this.waypoint); x.fillStyle = '#c77dff'; x.beginPath(); x.moveTo(px, py - 12); x.lineTo(px + 8, py); x.lineTo(px, py + 12); x.lineTo(px - 8, py); x.fill(); }
     const f = g.focus; const [px, py] = M(f.x, f.z); const hd = g.playerCar ? Math.atan2(g.playerCar.fwd.x, g.playerCar.fwd.z) : g.player.char.yaw;
     x.save(); x.translate(px, py); x.rotate(-hd + Math.PI); x.fillStyle = '#fff'; x.strokeStyle = '#111'; x.lineWidth = 2; x.beginPath(); x.moveTo(0, -12); x.lineTo(8, 9); x.lineTo(0, 4); x.lineTo(-8, 9); x.closePath(); x.fill(); x.stroke(); x.restore();

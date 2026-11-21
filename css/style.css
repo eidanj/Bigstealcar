@@ -240,3 +240,43 @@ body.touch #stuntPop .t { font-size: 30px; } body.touch #stuntPop .d { font-size
   #pause { padding: 2vh 3vw; } .pTitle { font-size: 22px; } .tabs button { padding: 6px 4px; font-size: 11px; min-width: 60px; } .mapSide { display: none; }
   .loadTip { font-size: 13px; }
 }
+
+/* ---------- weapons HUD ---------- */
+#weaponBox { margin-top: 6px; display: flex; justify-content: flex-end; align-items: center; gap: 10px; }
+#wIcon svg { width: 74px; height: 30px; display: block; filter: drop-shadow(2px 2px 0 #000); }
+#wAmmo { font-family: var(--big); font-weight: 400; font-size: 24px; letter-spacing: 0.05em; color: #fff; -webkit-text-stroke: 1.5px #000; paint-order: stroke; }
+#wAmmo small { font-size: 16px; opacity: 0.75; }
+#weaponBox.flash { animation: starPop 0.4s ease; }
+#crosshair { position: absolute; left: 50%; top: 50%; width: 0; height: 0; --g: 8px; }
+#crosshair i { position: absolute; background: #fff; box-shadow: 0 0 0 1px rgba(0,0,0,0.7); }
+#crosshair .t, #crosshair .b { width: 2px; height: 7px; left: -1px; } #crosshair .t { top: calc(-1 * var(--g) - 7px); } #crosshair .b { top: var(--g); }
+#crosshair .l, #crosshair .r { height: 2px; width: 7px; top: -1px; } #crosshair .l { left: calc(-1 * var(--g) - 7px); } #crosshair .r { left: var(--g); }
+#crosshair em { position: absolute; width: 3px; height: 3px; left: -1.5px; top: -1.5px; background: #fff; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,0.7); }
+#crosshair.melee i { display: none; }
+#hitmark { position: absolute; left: 50%; top: 50%; width: 26px; height: 26px; margin: -13px 0 0 -13px; opacity: 0; background: linear-gradient(45deg, transparent 46%, #fff 46%, #fff 54%, transparent 54%), linear-gradient(-45deg, transparent 46%, #fff 46%, #fff 54%, transparent 54%); -webkit-mask: radial-gradient(circle, transparent 5px, #000 6px); mask: radial-gradient(circle, transparent 5px, #000 6px); }
+#hitmark.show { animation: hitm 0.25s ease-out; } #hitmark.head { filter: hue-rotate(0deg) saturate(3); background-color: transparent; }
+#hitmark.head.show { animation: hitm 0.25s ease-out; } #hitmark.head { --hc: #ff4d4d; background: linear-gradient(45deg, transparent 46%, #ff4d4d 46%, #ff4d4d 54%, transparent 54%), linear-gradient(-45deg, transparent 46%, #ff4d4d 46%, #ff4d4d 54%, transparent 54%); }
+@keyframes hitm { 0% { opacity: 1; transform: scale(1.3); } 100% { opacity: 0; transform: scale(1); } }
+.bar.armor i { background: #4ea8ff; }
+#touch .tb.fire { background: rgba(229,57,53,0.45); width: 70px; height: 70px; }
+/* ---------- gun store ---------- */
+#shop { position: fixed; inset: 0; z-index: 70; display: flex; align-items: center; justify-content: flex-start; padding-left: 5vw; background: linear-gradient(90deg, rgba(0,0,0,0.75), rgba(0,0,0,0.15) 60%, rgba(0,0,0,0)); }
+.shopPanel { width: min(560px, 90vw); max-height: 88vh; display: flex; flex-direction: column; background: rgba(10,10,12,0.88); border-top: 6px solid #c1121f; box-shadow: 0 20px 60px rgba(0,0,0,0.6); }
+.shopHead { padding: 16px 20px 10px; background: linear-gradient(90deg, #7a0f0f, #2a0606); position: relative; }
+.shopLogo { font-family: var(--big); font-size: 44px; letter-spacing: 0.06em; color: #ffd60a; -webkit-text-stroke: 2px #000; paint-order: stroke; line-height: 1; }
+.shopSub { font-size: 13px; letter-spacing: 0.4em; opacity: 0.85; margin-top: 4px; }
+.shopCash { position: absolute; right: 18px; top: 18px; font-family: var(--big); font-size: 26px; color: var(--green); -webkit-text-stroke: 1.5px #000; paint-order: stroke; }
+.shopList { overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+.sRow { display: grid; grid-template-columns: 84px 1fr auto; gap: 12px; align-items: center; padding: 8px 12px; background: rgba(255,255,255,0.05); cursor: pointer; transition: background 0.12s; }
+.sRow:hover { background: rgba(255,255,255,0.14); }
+.sRow svg { width: 84px; height: 34px; }
+.sRow b { font-size: 18px; letter-spacing: 0.06em; display: block; } .sRow p { margin: 2px 0 4px; font-size: 12px; opacity: 0.7; }
+.sStats { display: flex; gap: 6px; font-size: 10px; letter-spacing: 0.1em; opacity: 0.85; }
+.sStats span { display: flex; align-items: center; gap: 4px; } .sStats i { display: inline-block; width: 40px; height: 4px; background: rgba(255,255,255,0.15); position: relative; } .sStats i em { position: absolute; inset: 0 auto 0 0; background: #ffd60a; }
+.sBuy { min-width: 112px; text-align: center; font-weight: 700; letter-spacing: 0.08em; padding: 8px 10px; background: #c1121f; color: #fff; font-size: 14px; }
+.sBuy.owned { background: rgba(255,255,255,0.12); } .sBuy.ammo { background: #2a9d8f; } .sBuy.poor { opacity: 0.45; }
+.sBuy small { display: block; font-size: 11px; font-weight: 500; opacity: 0.85; }
+.shopMsg { min-height: 22px; padding: 4px 20px; font-size: 14px; color: #ffd60a; }
+.shopFoot { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 14px; font-size: 13px; opacity: 0.9; }
+.shopFoot button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 8px 14px; letter-spacing: 0.1em; font-weight: 600; }
+@media (max-height: 560px) { .shopLogo { font-size: 30px; } .sRow { padding: 5px 8px; grid-template-columns: 64px 1fr auto; } .sRow svg { width: 64px; } .sRow p { display: none; } }

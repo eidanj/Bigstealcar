@@ -12,7 +12,9 @@ export class Player {
     this.char.onHardLanding = (v) => this.hurt((v - 14) * 7, 'fall');
   }
   hurt(n, why) {
-    if (n <= 0 || this.game.state !== 'play') return; this.health -= n; this.hurtT = 0; this.game.hud.el.classList.remove('hurt'); void this.game.hud.el.offsetWidth; this.game.hud.el.classList.add('hurt');
+    if (n <= 0 || this.game.state !== 'play') return;
+    const W = this.game.weapons; if (W && W.armor > 0 && why !== 'fall') { const a = Math.min(W.armor, n * (why === 'shot' ? 0.75 : 0.5)); W.armor -= a; n -= a; } // body armor soaks most of it
+    this.health -= n; this.hurtT = 0; this.game.hud.el.classList.remove('hurt'); void this.game.hud.el.offsetWidth; this.game.hud.el.classList.add('hurt');
     if (this.health <= 0) { this.health = 0; this.game.knockedOut(why); }
   }
   nearestCar() {
@@ -36,16 +38,22 @@ export class Player {
       return;
     }
     const [fx, fz] = g.rig.forward; const rx = -fz, rz = fx; const mx = input.moveX, my = input.moveY;
-    const sprint = input.down('ShiftLeft', 'ShiftRight');
-    const sp = sprint ? 7.2 : 4.3; _w.set(fx * my + rx * mx, 0, fz * my + rz * mx); const l = _w.length();
+    const sprint = input.down('ShiftLeft', 'ShiftRight'); const aim = ch.aimPose || ch.punchT > 0;
+    const sp = aim ? (g.weapons.aiming ? 2.4 : 3.4) : sprint ? 7.2 : 4.3; _w.set(fx * my + rx * mx, 0, fz * my + rz * mx); const l = _w.length();
     if (g.lockControls > 0) _w.set(0, 0, 0);
-    else if (l > 0.05) { _w.multiplyScalar(sp * Math.min(1, l) / l); ch.faceToward(_w.x, _w.z, dt, 12); }
+    else if (l > 0.05) { _w.multiplyScalar(sp * Math.min(1, l) / l); if (!aim) ch.faceToward(_w.x, _w.z, dt, 12); }
     ch.move(dt, _w, input.hit('Space') && g.lockControls <= 0);
     ch.animate(dt);
     // people knocking into us
     g.peds.carHits(ch);
+    // gun store counter
+    const st = g.world.interiorAt(ch.pos.x, ch.pos.z);
+    if (st && Math.hypot(ch.pos.x - st.counter[0], ch.pos.z - st.counter[1]) < 2.6) {
+      g.hud.prompt('[F] Shop at ~y~Blast Barn~w~'); if (input.hit('KeyF', 'KeyE') && g.lockControls <= 0) g.openShop(st);
+      this.hurtT += dt; return;
+    }
     // car prompt + enter
-    const car = this.nearestCar();
+    const car = st ? null : this.nearestCar();
     if (car && g.lockControls <= 0) {
       const steal = car.driver && car.driver !== 'player'; const cop = car.role === 'police';
       g.hud.prompt(`[F] ${steal ? 'Jack' : cop ? 'Steal police' : 'Steal'} ${car.type.name}`);

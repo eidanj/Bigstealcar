@@ -24,6 +24,7 @@ import { AudioEngine } from './audio.js';
 import { Input } from './input.js';
 import { CameraRig } from './camera.js';
 import { UI } from './ui.js';
+import { Weapons } from './weapons.js';
 
 const V3 = THREE.Vector3;
 const pickWeighted = (list) => { const tot = list.reduce((s, [, w]) => s + w, 0); let r = Math.random() * tot; for (const [k, w] of list) { r -= w; if (r <= 0) return k; } return list[0][0]; };
@@ -41,7 +42,7 @@ class Game {
   constructor() {
     this.settings = { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem('bsc_settings') || '{}')) };
     const sv = JSON.parse(localStorage.getItem('bsc_save_v1') || '{}');
-    this.cash = sv.cash ?? 250; this.save = { done: sv.done || {} };
+    this.cash = sv.cash ?? 250; this.save = { done: sv.done || {}, tutDone: !!sv.tutDone, weapons: sv.weapons || {} }; this.npcs = []; this.touch = isTouch();
     this.stats = { earned: 0, missions: 0, stolen: 0, topSpeed: 0, dist: 0, longestJump: 0, maxAir: 0, bestDrift: 0, knocked: 0, lights: 0, escapes: 0, busted: 0, ko: 0, ...(sv.stats || {}) };
     this.state = 'boot'; this.cars = []; this.playerCar = null; this.lastCar = null; this.lockControls = 0; this.cinematic = null; this.timeScale = 1;
     this.focus = new V3(0, 0, 0); this.night = 0; this.bustT = 0; this.carBustT = 0; this.t = 0; this.saveT = 0; this.tutorial = 0; this.tutT = 0; this.frameN = 0;
@@ -69,6 +70,10 @@ class Game {
     this.wanted = new Wanted(this); this.missions = new Missions(this); this.pickups = new Pickups(this); this.stunts = new Stunts(this);
     this.rig = new CameraRig(this.camera, this); this.rig.setMode('menu'); this.rig.blend = 1;
     this.props.onBreak = (rec, speed) => this.onPropBreak(rec, speed);
+    this.weapons = new Weapons(this, this.save.weapons);
+    // gun store clerks + one interior light that follows the player to the nearest store
+    for (const st of this.world.specials.stores || []) { const c = new Character(this, { skin: 0xc68642, hair: 0x2b1b12, shirt: 0x2f6f3a, sleeve: 0xe9e4da, pants: 0x2b2d42, shoes: 0x222222 }, st.clerk[0], st.clerk[1], Math.PI); c.store = st; this.npcs.push(c); }
+    this.storeLight = new THREE.PointLight(0xfff0d8, 0, 20, 1.4); this.scene.add(this.storeLight);
     // player + a starter car
     const start = this.startSpot();
     this.player = new Player(this, start.x, start.z, start.yaw); this.player.char.visible = false;
@@ -96,7 +101,7 @@ class Game {
     document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && this.state === 'play' && !isTouch() && !this.ignoreUnlock) this.pause('map'); this.ignoreUnlock = false; });
     document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'play') this.pause('map'); });
     this.renderer.domElement.addEventListener('click', () => { if (this.state === 'play') this.input.lock(); });
-    addEventListener('keydown', (e) => { if (this.state === 'paused' && (e.code === 'Escape' || e.code === 'KeyP') && !e.repeat) { e.preventDefault(); this.resume(); } else if (this.state === 'paused' && e.code === 'KeyM' && this.ui.curTab !== 'map') this.ui.tab('map'); });
+    addEventListener('keydown', (e) => { if (this.state === 'shop' && (e.code === 'Escape' || e.code === 'KeyF' || e.code === 'KeyE') && !e.repeat) { e.preventDefault(); this.closeShop(); return; } if (this.state === 'paused' && (e.code === 'Escape' || e.code === 'KeyP') && !e.repeat) { e.preventDefault(); this.resume(); } else if (this.state === 'paused' && e.code === 'KeyM' && this.ui.curTab !== 'map') this.ui.tab('map'); });
   }
 
   buildRenderer() {
@@ -173,7 +178,9 @@ class Game {
     if (this.playerCar) this.exitCar(true); this.player.char.visible = false; this.state = 'menu'; this.audio.menuMode = true; this.rig.setMode('menu'); this.rig.blend = 1; this.menuEnv(true);
     this.focus.set(0, 0, 0); this.ui.showMenu(); this.cinematic = null; this.timeScale = 1; this.grade.uniforms.uDesat.value = 0;
   }
-  saveGame() { localStorage.setItem('bsc_save_v1', JSON.stringify({ cash: this.cash, stats: this.stats, done: this.save.done, tutDone: this.save.tutDone })); }
+  saveGame() { localStorage.setItem('bsc_save_v1', JSON.stringify({ cash: this.cash, stats: this.stats, done: this.save.done, tutDone: this.save.tutDone, weapons: this.weapons ? this.weapons.save() : this.save.weapons })); }
+  openShop(st) { if (this.state !== 'play') return; this.state = 'shop'; this.shopStore = st; this.hud.prompt(''); this.input.unlock(); this.ui.openShop(); this.audio.register(); }
+  closeShop() { if (this.state !== 'shop') return; this.ui.closeShop(); this.state = 'play'; this.input.hits.clear(); this.input.keys.clear(); this.last = performance.now(); this.input.lock(); this.saveGame(); }
   addCash(n, why) { if (!n) return; this.cash = Math.max(0, this.cash + n); if (n > 0) this.stats.earned += n; this.hud.cashDelta(n); void why; }
 
   // ======================= spawning =======================
@@ -299,11 +306,12 @@ class Game {
     if (this.state !== 'play') return; this.state = 'busted'; this.cinematic = 'busted'; this.timeScale = 0.35; this.stats.busted++;
     const fee = Math.min(this.cash, Math.max(100, Math.round(this.cash * 0.1)));
     this.hud.big('BUSTED', fee ? `Bail paid: ~r~-${fmtMoney(fee)}` : '', 'busted', 4.4); this.audio.busted(); this.missions.abort();
+    for (const k in this.weapons.ammo) this.weapons.ammo[k].res = Math.floor(this.weapons.ammo[k].res / 2); this.weapons.armor = 0; // the cops keep half your ammo
     setTimeout(() => this.respawn('police', fee), 4300);
   }
   knockedOut(why) {
     if (this.state !== 'play') return; this.state = 'ko'; this.cinematic = 'ko'; this.timeScale = 0.35; this.stats.ko++;
-    const fee = Math.min(this.cash, 100); this.hud.big('KNOCKED OUT', `Hospital bill: ~r~-${fmtMoney(fee)}`, 'ko', 4.4); this.audio.knockout(); this.missions.abort();
+    this.weapons.armor = 0; const fee = Math.min(this.cash, 100); this.hud.big('KNOCKED OUT', `Hospital bill: ~r~-${fmtMoney(fee)}`, 'ko', 4.4); this.audio.knockout(); this.missions.abort();
     if (this.player.char.state === 'walk' && !this.playerCar) this.player.char.knock(new V3(0, 2, 0), 0.4);
     void why; setTimeout(() => this.respawn('hospital', fee), 4300);
   }
@@ -347,6 +355,8 @@ class Game {
     const g = this; const inp = this.input; const play = this.state === 'play';
     this.t += dt; this.lockControls = Math.max(0, this.lockControls - dt);
     if (play) this.controls(dt);
+    this.weapons.update(dt, play ? inp : null);
+    if (play) { /* fallthrough */ }
     else if (this.playerCar) { const c = this.playerCar.ctrl; c.throttle = 0; c.brake = 0.5; c.handbrake = false; }
     // AI
     for (const car of this.cars) if (car.ai) car.ai.update(dt);
@@ -385,7 +395,15 @@ class Game {
     for (const ch of this.peds.list) this.humans.draw(ch); for (const ch of this.peds.cops) this.humans.draw(ch);
     for (const car of this.cars) if (car.driverChar) { car.driverChar.animate(dt); this.humans.draw(car.driverChar); }
     if (this.player) { if (this.playerCar) this.player.char.animate(dt); this.humans.draw(this.player.char); }
-    this.humans.commit(dt); this.wheels.commit();
+    let nearStore = null, nsd = 50;
+    for (const c of this.npcs) {
+      const pc = this.player.char; const d = Math.hypot(pc.pos.x - c.pos.x, pc.pos.z - c.pos.z); c.speed = 0;
+      if (d < 7 && !this.playerCar) c.faceToward(pc.pos.x - c.pos.x, pc.pos.z - c.pos.z, dt, 5); else c.faceToward(0, -1, dt, 2);
+      if (d < 5 && !c.greeted) { c.greeted = true; c.wave = 1.2; } if (d > 12) c.greeted = false;
+      c.animate(dt); this.humans.draw(c); const sd = Math.hypot(this.focus.x - c.store.x, this.focus.z - c.store.z); if (sd < nsd) { nsd = sd; nearStore = c.store; }
+    }
+    if (nearStore) { this.storeLight.position.set(...nearStore.light); this.storeLight.intensity = 28; } else this.storeLight.intensity = 0;
+    this.weapons.postDraw(); this.humans.commit(dt); this.wheels.commit();
     this.effects.update(dt);
     // stats
     if (this.playerCar) { this.stats.topSpeed = Math.max(this.stats.topSpeed, this.playerCar.speed); this.stats.dist += this.playerCar.speed * dt; }
@@ -428,10 +446,11 @@ class Game {
     if (this.tutorial < 99 && this.tutT <= 0) {
       if (this.tutorial === 0) { this.hud.help(`Welcome to ~y~San Altekz~w~. That red ~y~${this.starter ? this.starter.type.name : 'car'}~w~ looks lonely. Walk up to it and press [F] to steal it.`, 7); this.tutorial = 1; this.tutT = 14; }
       else if (this.tutorial === 1) { if (!this.playerCar) { this.hud.help('Press [F] next to any car to steal it.', 4); this.tutT = 14; } }
-      else if (this.tutorial <= 4) {
+      else if (this.tutorial <= 5) {
         const tips = ['[W] [S] drive and reverse, [A] [D] steer, hold [Space] to drift. [H] horn, [V] camera, [Q] radio.',
           'Hit ~y~ramps~w~ and pull long ~b~drifts~w~ for cash. Smash into traffic or streetlights and the ~r~cops~w~ come running.',
-          'Drive into a glowing marker to start a mission: ~y~R~w~ races, ~g~S~w~ stunt jumps, ~r~G~w~ getaways. Press [M] for the map.'];
+          'Drive into a glowing marker to start a mission: ~y~R~w~ races, ~g~S~w~ stunt jumps, ~r~G~w~ getaways. Press [M] for the map.',
+          'Need firepower? Walk into a ~y~Blast Barn~w~ gun store (orange ~y~A~w~ on the map). Left click punches or shoots, right click aims.'];
         this.hud.help(tips[this.tutorial - 2], 7); this.tutorial++; this.tutT = 9;
       } else { this.tutorial = 99; this.save.tutDone = true; this.saveGame(); }
     }
@@ -441,7 +460,7 @@ class Game {
     let dt = Math.min(0.05, (now - this.last) / 1000); this.last = now; if (!(dt > 0)) dt = 1 / 60;
     this.fps = damp(this.fps || 60, 1 / dt, 3, dt); this.frameN++;
     try {
-      if (this.state !== 'paused' && this.state !== 'loading') {
+      if (this.state !== 'paused' && this.state !== 'loading' && this.state !== 'shop') {
         const sdt = dt * this.timeScale; this.sim(sdt);
         this.rig.update(dt, this.state === 'play' ? this.input : null, this.settings);
         if (this.state === 'play' || this.state === 'busted' || this.state === 'ko') this.hud.update(dt);

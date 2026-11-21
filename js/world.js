@@ -292,6 +292,7 @@ export class World {
     at(1, 3).special = 'spray'; at(6, 6).special = 'spray'; at(5, 2).special = 'police'; at(3, 6).special = 'hospital';
     at(1, 3).alley = null; at(6, 6).alley = null; at(5, 2).alley = null; at(3, 6).alley = null;
     at(4, 4).special = 'tower';
+    at(3, 1).special = 'store'; at(3, 1).alley = null; at(7, 5).special = 'store'; at(7, 5).alley = null;
   }
 
   // ---------- blocks ----------
@@ -343,6 +344,7 @@ export class World {
     if (b.special === 'spray') rects = this.placeSpray(b, rects);
     if (b.special === 'police') rects = this.placeCivic(b, rects, 'police');
     if (b.special === 'hospital') rects = this.placeCivic(b, rects, 'hospital');
+    if (b.special === 'store') rects = this.placeStore(b);
     for (const r of rects) this.subdivide(b, r, R, 0);
   }
 
@@ -442,6 +444,46 @@ export class World {
     // remaining lot space
     return rects.flatMap(([a, c, e, f]) => [[x1 + 1, c, e, f], [a, z1 + 1, x1 + 1, f]]).filter(([a, c, e, f]) => e - a > 6 && f - c > 6);
   }
+
+  // walk-in gun store: brick shell with an open doorway, pegboard gun wall, counter and a clerk
+  placeStore(b) {
+    const { cx, cz } = b; const x0 = cx + 2, x1 = cx + 16, z0 = cz - LOT, z1 = z0 + 13, h = CURB + 5.2, t = 0.3, dw = 2.6, dh = CURB + 3.1; const gx = (x0 + x1) / 2;
+    if (!this.storeMat) {
+      this.storeMat = {
+        peg: new THREE.MeshStandardMaterial({ map: TX.pegboard(), roughness: 0.8, emissive: 0x2a1c0c, emissiveIntensity: 0.6 }),
+        floor: new THREE.MeshStandardMaterial({ map: TX.tiles(), roughness: 0.35, metalness: 0.1 }),
+        ceil: new THREE.MeshStandardMaterial({ map: TX.ceilingPanels(), emissiveMap: TX.ceilingPanels(), emissive: 0xffffff, emissiveIntensity: 1.6 }),
+        glass: new THREE.MeshPhysicalMaterial({ color: 0x9fd3e6, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.35 }),
+      };
+      this.storeGB = { peg: new GB(), floor: new GB(), ceil: new GB() };
+    }
+    const F = this.facade.brick; const tint = [0.78, 0.42, 0.38];
+    const wall = (ax0, ax1, ay0, ay1, az0, az1) => { F.gb.sides(ax0, ax1, ay0, ay1, az0, az1, F.tw, F.th, tint, ay0 - CURB); this.gb.roof.top(ax0, ax1, ay1, az0, az1, 4, [0.6, 0.6, 0.6]); this.boxCollider(ax0, ax1, az0, az1, 0, ay1); };
+    wall(x0, x1, CURB, h, z1 - t, z1); wall(x0, x0 + t, CURB, h, z0, z1); wall(x1 - t, x1, CURB, h, z0, z1);
+    wall(x0, gx - dw / 2, CURB, h, z0, z0 + t); wall(gx + dw / 2, x1, CURB, h, z0, z0 + t);
+    F.gb.sides(gx - dw / 2, gx + dw / 2, dh, h, z0, z0 + t, F.tw, F.th, tint, dh - CURB);
+    this.gb.roof.top(x0, x1, h, z0, z1, 4, [0.7, 0.7, 0.7]);
+    const P = this.storeGB, ix0 = x0 + t + 0.01, ix1 = x1 - t - 0.01, iz0 = z0 + t + 0.01, iz1 = z1 - t - 0.01;
+    P.peg.quad([ix1, CURB, iz1], [ix0, CURB, iz1], [ix0, h, iz1], [ix1, h, iz1], [0, 0, -1], 0, (ix1 - ix0) / 4, 0, (h - CURB) / 4);
+    P.peg.quad([ix0, CURB, iz1], [ix0, CURB, iz0], [ix0, h, iz0], [ix0, h, iz1], [1, 0, 0], 0, (iz1 - iz0) / 4, 0, (h - CURB) / 4);
+    P.peg.quad([ix1, CURB, iz0], [ix1, CURB, iz1], [ix1, h, iz1], [ix1, h, iz0], [-1, 0, 0], 0, (iz1 - iz0) / 4, 0, (h - CURB) / 4);
+    P.floor.top(ix0, ix1, CURB + 0.02, iz0, iz1, 2.5);
+    P.ceil.quad([ix0, h - 0.02, iz0], [ix1, h - 0.02, iz0], [ix1, h - 0.02, iz1], [ix0, h - 0.02, iz1], [0, -1, 0], 0, (ix1 - ix0) / 3, 0, (iz1 - iz0) / 3);
+    // counter with a glass top, display rack and a shutter frame around the door
+    const cz0 = z1 - 4.4, cz1 = z1 - 3.6;
+    this.gb.props.box(x0 + 2.2, x1 - 2.2, CURB, CURB + 1.0, cz0, cz1, [0.32, 0.2, 0.12]);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0 - 4.4, 0.06, 0.8), this.storeMat.glass); glass.position.set(gx, CURB + 1.03, (cz0 + cz1) / 2); this.root.add(glass);
+    this.boxCollider(x0 + 2.2, x1 - 2.2, cz0, cz1, 0, CURB + 1.05);
+    this.gb.metal.box(x0 + 1.0, x1 - 1.0, CURB, CURB + 0.08, z1 - 1.0, z1 - 0.6, [1, 1, 1]);
+    this.gb.metal.box(gx - dw / 2 - 0.15, gx - dw / 2, CURB, dh, z0 - 0.08, z0 + t + 0.08, [1, 1, 1]); this.gb.metal.box(gx + dw / 2, gx + dw / 2 + 0.15, CURB, dh, z0 - 0.08, z0 + t + 0.08, [1, 1, 1]);
+    for (const dx of [-1.9, 1.9]) { const m = new THREE.Matrix4().makeTranslation(gx + dx, CURB + 0.5, z0 - 1.3); this.gb.props.geo(new THREE.CylinderGeometry(0.14, 0.16, 1.0, 10), m, [0.95, 0.75, 0.1]); this.circleCollider(gx + dx, z0 - 1.3, 0.18, 0, CURB + 1); }
+    this.props.sign('BLAST BARN', gx, h + 1.25, z0 - 0.35, Math.PI, 11, 2.3, { bg: '#7a0f0f', fg: '#ffd60a', border: '#ffd60a' });
+    this.props.sign('GUNS · AMMO · ARMOR', gx, dh + 0.55, z0 - 0.25, Math.PI, 4.6, 0.7, { bg: '#111', fg: '#ff5a5f', size: 60 });
+    this.buildings.push({ x0, z0, x1, z1, h: 5.2, style: 'store' });
+    (this.specials.stores || (this.specials.stores = [])).push({ x: gx, z: z0 - 2, door: [gx, z0], x0: ix0, x1: ix1, z0: iz0, z1: iz1, roofY: h, counter: [gx, cz0 - 0.9], clerk: [gx, cz1 + 1.0], light: [gx, h - 0.7, (z0 + z1) / 2] });
+    const L = LOT; return [[cx - L, cz - L, x0 - 1, cz + L], [x1 + 1, cz - L, cx + L, cz + L], [x0 - 1, z1 + 1, x1 + 1, cz + L]];
+  }
+  interiorAt(x, z) { for (const s of this.specials.stores || []) if (x > s.x0 - 0.2 && x < s.x1 + 0.2 && z > s.z0 - 0.4 && z < s.z1 + 0.2) return s; return null; }
 
   placeCivic(b, rects, kind) {
     const { cx, cz } = b; const x0 = cx - LOT, x1 = cx + LOT, z0 = cz - LOT + 12, z1 = cz + 8; const h = kind === 'police' ? 16 : 26;
@@ -652,6 +694,7 @@ export class World {
     add(this.gb.roof, this.mat.roof, false, true);
     add(this.gb.props, this.mat.props, true, true);
     add(this.gb.metal, this.mat.metal, true, true);
+    if (this.storeGB) { add(this.storeGB.peg, this.storeMat.peg, false, true); add(this.storeGB.floor, this.storeMat.floor, false, true); add(this.storeGB.ceil, this.storeMat.ceil, false, false); }
     const asp = this.mat.asphalt.clone(); asp.map = this.asphaltTex.map.clone(); asp.map.repeat.set(1, 1); asp.normalMap = this.asphaltTex.normalMap.clone(); asp.normalMap.repeat.set(1, 1); asp.roughnessMap = null; asp.roughness = 0.88; asp.color.setScalar(0.9);
     asp.map.needsUpdate = true; asp.normalMap.needsUpdate = true;
     asp.polygonOffset = true; asp.polygonOffsetFactor = -1; asp.polygonOffsetUnits = -1;

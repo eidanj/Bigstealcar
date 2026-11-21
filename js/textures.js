@@ -381,3 +381,31 @@ export function corrugated(color) {
   const [c, x] = cv(128, 128); for (let i = 0; i < 128; i += 8) { x.fillStyle = (i / 8) % 2 ? color : shade(color, 0.78); x.fillRect(i, 0, 8, 128); }
   x.fillStyle = 'rgba(0,0,0,0.15)'; x.fillRect(0, 0, 128, 4); x.fillRect(0, 124, 128, 4); return tex(c);
 }
+
+// ---------- gun store interior ----------
+function gunShape(x, k, cx, cy, s) { // simple silhouettes for the pegboard
+  x.save(); x.translate(cx, cy); x.scale(s, s); x.fillStyle = '#1b1b1d';
+  if (k === 0) { x.fillRect(-40, -8, 80, 14); x.fillRect(-40, -8, 18, 34); x.fillRect(20, -4, 24, 6); } // pistol
+  else if (k === 1) { x.fillRect(-70, -8, 120, 14); x.fillRect(-20, 6, 12, 26); x.fillRect(-70, -4, -30, 18); x.fillRect(50, -4, 30, 5); } // smg
+  else if (k === 2) { x.fillRect(-100, -6, 200, 10); x.fillRect(-100, -6, -40, 22); x.fillStyle = '#6b4226'; x.fillRect(-140, -2, 50, 18); x.fillRect(10, 4, 40, 10); } // shotgun
+  else { x.fillRect(-90, -8, 170, 14); x.fillRect(-10, 6, 14, 30); x.fillRect(-90, -4, -40, 20); x.fillRect(80, -3, 40, 5); x.fillRect(-20, -18, 40, 8); } // rifle
+  x.restore();
+}
+export function pegboard() {
+  const N = 512; const r = rng(808); const [c, x] = cv(N, N);
+  x.fillStyle = '#c8a26a'; x.fillRect(0, 0, N, N);
+  x.fillStyle = 'rgba(80,50,20,0.35)'; for (let j = 8; j < N; j += 16) for (let i = 8; i < N; i += 16) { x.beginPath(); x.arc(i, j, 2.2, 0, 7); x.fill(); }
+  x.fillStyle = 'rgba(255,255,255,0.06)'; for (let k = 0; k < 30; k++) x.fillRect(r() * N, 0, 2, N);
+  for (let row = 0; row < 3; row++) for (let col = 0; col < 2; col++) gunShape(x, (row * 2 + col) % 4, 130 + col * 256, 90 + row * 165, 0.9 + r() * 0.2);
+  return tex(c);
+}
+export function tiles() {
+  const [c, x] = cv(256, 256); for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) { x.fillStyle = (i + j) % 2 ? '#d9d9d6' : '#2b2b2e'; x.fillRect(i * 64, j * 64, 64, 64); }
+  x.strokeStyle = 'rgba(0,0,0,0.25)'; x.lineWidth = 2; for (let k = 0; k <= 256; k += 64) { x.beginPath(); x.moveTo(k, 0); x.lineTo(k, 256); x.stroke(); x.beginPath(); x.moveTo(0, k); x.lineTo(256, k); x.stroke(); }
+  return tex(c);
+}
+export function ceilingPanels() {
+  const [c, x] = cv(256, 256); x.fillStyle = '#5a5a5e'; x.fillRect(0, 0, 256, 256);
+  x.fillStyle = '#fff8e6'; x.fillRect(24, 24, 208, 70); x.fillRect(24, 162, 208, 70);
+  return tex(c);
+}
