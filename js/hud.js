@@ -131,7 +131,7 @@ export class HUD {
     const on = !!text; if (on !== this._prompting) { this._prompting = on; document.body.classList.toggle('prompting', on); }
   }
   objective(t) { this.objEl.innerHTML = fmt(t || ''); }
-  timer(t) { if (t == null) { this.timerEl.textContent = ''; this.timerEl.classList.remove('urgent'); return; } const m = Math.floor(t / 60), s = Math.floor(t % 60); this.timerEl.textContent = `${m}:${String(s).padStart(2, '0')}`; this.timerEl.classList.toggle('urgent', t < 10); }
+  timer(t) { const m0 = t != null; if (m0 !== this._mission) { this._mission = m0; document.body.classList.toggle('mission', m0); } if (t == null) { this.timerEl.textContent = ''; this.timerEl.classList.remove('urgent'); return; } const m = Math.floor(t / 60), s = Math.floor(t % 60); this.timerEl.textContent = `${m}:${String(s).padStart(2, '0')}`; this.timerEl.classList.toggle('urgent', t < 10); }
   countdown(v) { if (this._cd === v) return; this._cd = v; this.cdEl.textContent = v > 0 || v === 'GO' ? v : ''; this.cdEl.classList.remove('pop'); void this.cdEl.offsetWidth; this.cdEl.classList.add('pop'); this.cdT = v === 'GO' ? 1 : 2; if (v !== 'GO' && v > 0) this.g.audio.beep(); }
   vehicle(name) { this.vehEl.textContent = name; this.vehT = 4; }
   radio(name) { this.radioEl.textContent = name; this.radioT = 3; }

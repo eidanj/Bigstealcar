@@ -253,7 +253,7 @@ button { font-family: var(--hud); cursor: pointer; }
 /* ======================= touch controls ======================= */
 /* --u is one thumb-sized unit: ~52px on an iPhone in landscape, ~86px on an iPad. Everything is placed from the
    bottom corners (where thumbs rest) and kept inside the safe area (notch, Dynamic Island, home bar). */
-body.touch { --u: clamp(52px, 12.5vmin, 88px); --sl: max(env(safe-area-inset-left), 14px); --sr: max(env(safe-area-inset-right), 14px); --sb: max(env(safe-area-inset-bottom), 12px); --st: max(env(safe-area-inset-top), 10px); -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+body.touch { --u: clamp(42px, min(12.5vmin, 15.5vh), 88px); --sl: max(env(safe-area-inset-left), 14px); --sr: max(env(safe-area-inset-right), 14px); --sb: max(env(safe-area-inset-bottom), 12px); --st: max(env(safe-area-inset-top), 10px); -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
 #touch { position: fixed; inset: 0; z-index: 30; touch-action: none; -webkit-user-select: none; user-select: none; }
 body:not(.inplay) #touch { display: none; }
 body.driving #touch .foot { display: none !important; } body:not(.driving) #touch .car { display: none !important; }
@@ -261,11 +261,12 @@ body.driving #touch .foot { display: none !important; } body:not(.driving) #touc
 #touch .tb.sm { width: calc(var(--u) * 0.8); height: calc(var(--u) * 0.8); font-size: calc(var(--u) * 0.17); }
 #touch .tb svg { width: 56%; height: 56%; fill: #fff; }
 #touch .tb.on, #touch .zone.on { background: rgba(255,255,255,0.5); border-color: #fff; transform: scale(0.95); }
-#touch .topbtns { position: absolute; left: var(--sl); top: calc(var(--st) + var(--u) * 2.25); display: flex; gap: calc(var(--u) * 0.16); }
+#touch .topbtns { position: absolute; left: calc(var(--sl) + var(--u) * 3.1); top: var(--st); display: flex; gap: calc(var(--u) * 0.16); }
 #touch .topbtns .tb { position: relative; }
 body.nofs #touch .fsBtn { display: none; }
 /* --- driving: steering pads (bottom-left) --- */
-#touch .pad { position: absolute; display: flex; gap: calc(var(--u) * 0.2); touch-action: none; }
+#touch .pad { position: absolute; display: flex; gap: calc(var(--u) * 0.2); touch-action: none; pointer-events: none; } /* only the pads themselves take touches */
+#touch .pad .zone { pointer-events: auto; }
 #touch .steer { left: calc(var(--sl) + var(--u) * 0.18); bottom: calc(var(--sb) + var(--u) * 0.18); }
 #touch .zone { border: 2px solid rgba(255,255,255,0.55); background: rgba(10,12,16,0.42); display: flex; align-items: center; justify-content: center; box-shadow: 0 2px 10px rgba(0,0,0,0.35); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px); transition: transform 0.06s; }
 #touch .steer .zone { width: calc(var(--u) * 1.5); height: calc(var(--u) * 1.5); border-radius: 24%; }
@@ -273,13 +274,13 @@ body.nofs #touch .fsBtn { display: none; }
 /* --- driving: pedals (bottom-right), gas outermost and tallest --- */
 #touch .pedals { right: calc(var(--sr) + var(--u) * 0.18); bottom: calc(var(--sb) + var(--u) * 0.18); align-items: flex-end; }
 #touch .pedals .zone { border-radius: 18%; font: 700 calc(var(--u) * 0.22)/1 var(--big); letter-spacing: 0.08em; color: #fff; text-shadow: 1px 1px 0 #000; background-image: repeating-linear-gradient(0deg, rgba(255,255,255,0.08) 0 6px, transparent 6px 14px); }
-#touch .pedals .brake { width: calc(var(--u) * 1.3); height: calc(var(--u) * 1.55); background-color: rgba(200,40,40,0.38); }
-#touch .pedals .gas { width: calc(var(--u) * 1.3); height: calc(var(--u) * 2.25); background-color: rgba(40,170,80,0.4); }
+#touch .pedals .brake { width: calc(var(--u) * 1.3); height: calc(var(--u) * 1.4); background-color: rgba(200,40,40,0.38); }
+#touch .pedals .gas { width: calc(var(--u) * 1.3); height: calc(var(--u) * 1.85); background-color: rgba(40,170,80,0.4); }
 #touch .pedals .zone.on { background-color: rgba(255,255,255,0.5); }
-#touch .drift { right: calc(var(--sr) + var(--u) * 0.18); bottom: calc(var(--sb) + var(--u) * 2.62); width: calc(var(--u) * 1.3); height: calc(var(--u) * 0.95); border-radius: calc(var(--u) * 0.3); background: rgba(255,170,0,0.38); }
-#touch .exit { right: calc(var(--sr) + var(--u) * 1.78); bottom: calc(var(--sb) + var(--u) * 1.95); background: rgba(255,214,10,0.32); }
-#touch .horn { right: calc(var(--sr) + var(--u) * 1.85); bottom: calc(var(--sb) + var(--u) * 3.08); }
-#touch .flip { left: 50%; transform: translateX(-50%); bottom: calc(var(--sb) + var(--u) * 2.6); width: calc(var(--u) * 1.5); border-radius: calc(var(--u) * 0.3); background: rgba(255,214,10,0.45); display: none; }
+#touch .drift { right: calc(var(--sr) + var(--u) * 0.18); bottom: calc(var(--sb) + var(--u) * 2.19); width: calc(var(--u) * 1.3); height: calc(var(--u) * 0.85); border-radius: calc(var(--u) * 0.28); background: rgba(255,170,0,0.38); }
+#touch .exit { right: calc(var(--sr) + var(--u) * 1.68); bottom: calc(var(--sb) + var(--u) * 1.74); background: rgba(255,214,10,0.32); }
+#touch .horn { right: calc(var(--sr) + var(--u) * 2.86); bottom: calc(var(--sb) + var(--u) * 1.84); }
+#touch .flip { left: 50%; transform: translateX(-50%); bottom: calc(var(--sb) + var(--u) * 0.45); width: calc(var(--u) * 1.6); border-radius: calc(var(--u) * 0.3); background: rgba(255,214,10,0.6); display: none; z-index: 2; }
 body.canflip #touch .flip { display: flex; animation: tbPulse 1s ease-in-out infinite; }
 #touch .flip.on { transform: translateX(-50%) scale(0.95); }
 #touch .sigs { position: absolute; left: calc(var(--sl) + var(--u) * 0.18); bottom: calc(var(--sb) + var(--u) * 1.95); display: flex; gap: calc(var(--u) * 0.18); }
@@ -290,13 +291,13 @@ body.canflip #touch .flip { display: flex; animation: tbPulse 1s ease-in-out inf
 #touch .stick.sprint { border-color: #ffd166; box-shadow: 0 0 0 3px rgba(255,209,102,0.35); }
 #touch .knob { position: absolute; left: 50%; top: 50%; width: calc(var(--u) * 0.95); height: calc(var(--u) * 0.95); margin: calc(var(--u) * -0.475) 0 0 calc(var(--u) * -0.475); border-radius: 50%; background: rgba(255,255,255,0.6); }
 /* --- on foot: action buttons around the right thumb --- */
-#touch .fire { right: calc(var(--sr) + var(--u) * 0.22); bottom: calc(var(--sb) + var(--u) * 0.3); width: calc(var(--u) * 1.5); height: calc(var(--u) * 1.5); font-size: calc(var(--u) * 0.26); background: rgba(229,57,53,0.48); }
-#touch .jump { right: calc(var(--sr) + var(--u) * 1.95); bottom: calc(var(--sb) + var(--u) * 0.2); }
-#touch .aim { right: calc(var(--sr) + var(--u) * 0.45); bottom: calc(var(--sb) + var(--u) * 2.0); }
-#touch .enter { right: calc(var(--sr) + var(--u) * 1.75); bottom: calc(var(--sb) + var(--u) * 1.45); width: calc(var(--u) * 1.05); height: calc(var(--u) * 1.05); font-size: calc(var(--u) * 0.36); background: rgba(255,214,10,0.38); }
+#touch .fire { right: calc(var(--sr) + var(--u) * 0.22); bottom: calc(var(--sb) + var(--u) * 0.22); width: calc(var(--u) * 1.45); height: calc(var(--u) * 1.45); font-size: calc(var(--u) * 0.26); background: rgba(229,57,53,0.48); }
+#touch .jump { right: calc(var(--sr) + var(--u) * 1.85); bottom: calc(var(--sb) + var(--u) * 0.12); width: calc(var(--u) * 0.95); height: calc(var(--u) * 0.95); }
+#touch .aim { right: calc(var(--sr) + var(--u) * 0.45); bottom: calc(var(--sb) + var(--u) * 1.85); width: calc(var(--u) * 0.9); height: calc(var(--u) * 0.9); }
+#touch .enter { right: calc(var(--sr) + var(--u) * 1.8); bottom: calc(var(--sb) + var(--u) * 1.2); width: var(--u); height: var(--u); font-size: calc(var(--u) * 0.36); background: rgba(255,214,10,0.38); }
 body.prompting #touch .enter { animation: tbPulse 0.9s ease-in-out infinite; background: rgba(255,214,10,0.65); }
-#touch .weap { right: calc(var(--sr) + var(--u) * 0.55); bottom: calc(var(--sb) + var(--u) * 3.15); }
-#touch .reload { right: calc(var(--sr) + var(--u) * 1.6); bottom: calc(var(--sb) + var(--u) * 2.75); }
+#touch .weap { right: calc(var(--sr) + var(--u) * 3.0); bottom: calc(var(--sb) + var(--u) * 1.3); }
+#touch .reload { right: calc(var(--sr) + var(--u) * 3.0); bottom: calc(var(--sb) + var(--u) * 0.25); }
 body.melee #touch .aim, body.melee #touch .reload { display: none; }
 @keyframes tbPulse { 0%, 100% { box-shadow: 0 0 0 0 rgba(255,214,10,0.6); } 50% { box-shadow: 0 0 0 calc(var(--u) * 0.14) rgba(255,214,10,0); } }
 /* --- HUD moved out of the thumbs' way --- */
@@ -306,8 +307,8 @@ body.touch #mapCanvas { width: calc(var(--u) * 2.9); height: calc(var(--u) * 1.8
 body.touch #topRight { top: var(--st); right: var(--sr); }
 body.touch #cash { font-size: calc(var(--u) * 0.56); } body.touch #stars i { font-size: calc(var(--u) * 0.4); } body.touch #clock { font-size: calc(var(--u) * 0.26); }
 body.touch #wIcon svg { width: calc(var(--u) * 1.2); height: calc(var(--u) * 0.5); } body.touch #wAmmo { font-size: calc(var(--u) * 0.38); }
-body.touch #helpBox { top: calc(var(--st) + var(--u) * 0.9); left: 50%; transform: translateX(-50%); max-width: min(44vw, 520px); font-size: clamp(12px, calc(var(--u) * 0.24), 17px); padding: 8px 12px; }
-body.touch #missionTop { top: var(--st); }
+body.touch #helpBox { top: calc(var(--st) + var(--u) * 0.95); left: 50%; transform: translateX(-50%); max-width: min(44vw, 520px); font-size: clamp(12px, calc(var(--u) * 0.24), 17px); padding: 8px 12px; }
+body.touch #missionTop { top: calc(var(--st) + var(--u) * 0.95); } body.touch.mission #helpBox { top: calc(var(--st) + var(--u) * 2.1); }
 body.touch #speedo { left: 50%; right: auto; transform: translateX(-50%); bottom: var(--sb); width: calc(var(--u) * 2); height: calc(var(--u) * 2); }
 body.touch #vehName { right: auto; left: 50%; transform: translateX(-50%); bottom: calc(var(--sb) + var(--u) * 2.05); font-size: calc(var(--u) * 0.42); white-space: nowrap; }
 body.touch #areaName { right: auto; left: 50%; transform: translateX(-50%); bottom: calc(var(--sb) + var(--u) * 2.55); font-size: calc(var(--u) * 0.32); white-space: nowrap; }
@@ -324,7 +325,7 @@ body.touch #crosshair { display: block; }
 @keyframes rotHint { 0%, 30% { transform: rotate(0deg); } 60%, 100% { transform: rotate(-90deg); } }
 @media (orientation: portrait) and (max-width: 600px) { body.touch #rotate { display: flex; } }
 /* iPad portrait: the screen is tall, so lift the HUD text a little and keep the controls at the bottom corners */
-@media (orientation: portrait) and (min-width: 601px) { body.touch #helpBox { top: calc(var(--st) + var(--u) * 3.3); max-width: 80vw; } body.touch #objective { top: calc(var(--st) + var(--u) * 4.6); } }
+@media (orientation: portrait) and (min-width: 601px) { body.touch #prompt { bottom: calc(var(--sb) + var(--u) * 3.3); } body.touch #speedo { bottom: calc(var(--sb) + var(--u) * 3.0); } body.touch #vehName { bottom: calc(var(--sb) + var(--u) * 5.05); } body.touch #areaName { bottom: calc(var(--sb) + var(--u) * 5.55); } body.touch #helpBox { top: calc(var(--st) + var(--u) * 2.3); max-width: 80vw; } body.touch #objective { top: calc(var(--st) + var(--u) * 4.6); } }
 
 .pInfo .pResume { display: none; margin-left: 14px; font: 600 14px var(--hud); letter-spacing: 0.08em; color: #111; background: var(--gold); border: 0; padding: 8px 16px; cursor: pointer; }
 body.touch .pInfo .pResume { display: inline-block; min-height: 40px; font-size: 15px; }
@@ -334,3 +335,5 @@ body.touch .tabs button { min-height: 40px; }
 body.touch #shop { padding-left: max(env(safe-area-inset-left), 4vw); }
 body.touch .shopFoot span { display: none; }
 body.touch #shopClose { min-height: 44px; padding: 0 22px; }
+/* very short screens (small iPhones with Safari's toolbars showing): a slimmer gas pedal and no clock */
+@media (max-height: 300px) { body.touch #clock { display: none; } body.touch #touch .pedals .gas { height: calc(var(--u) * 1.6); } body.touch #touch .drift { bottom: calc(var(--sb) + var(--u) * 1.94); } }

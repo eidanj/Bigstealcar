@@ -63,7 +63,7 @@ export class Input {
       e.preventDefault(); const x = e.clientX, y = e.clientY, id = e.pointerId;
       if (e.target.closest('[data-fs]')) { if (this.onFullscreenBtn) this.onFullscreenBtn(); return; }
       const pad = e.target.closest('.pad'); const btn = pad ? null : e.target.closest('[data-key]');
-      try { (pad || btn || root).setPointerCapture(id); } catch (err) { /* older Safari */ }
+      try { ((pad && e.target.closest('.zone')) || btn || root).setPointerCapture(id); } catch (err) { /* older Safari */ }
       if (pad) { this.ptr.set(id, { kind: 'pad', el: pad, key: padKey(pad, x) }); sync(); return; }
       if (btn) {
         const k = btn.dataset.key;
