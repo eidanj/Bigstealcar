@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>Big Steal Car</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 64 64%22%3E%3Crect width=%2264%22 height=%2264%22 rx=%2212%22 fill=%22%23111%22/%3E%3Ctext x=%2232%22 y=%2246%22 font-size=%2240%22 text-anchor=%22middle%22 fill=%22%23ffb703%22 font-family=%22Impact,Arial%22%3EB%3C/text%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Anton&family=Oswald:wght@400;500;600;700&family=VT323&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+  <script type="importmap">
+    { "imports": { "three": "./lib/three.module.js", "three/addons/": "./lib/addons/" } }
+  </script>
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- ================= HUD ================= -->
+  <div id="hud" class="hidden">
+    <div id="topRight">
+      <div id="clock">12:00</div>
+      <div id="cash">$0</div>
+      <div id="cashDelta"></div>
+      <div id="stars"><i>★</i><i>★</i><i>★</i><i>★</i><i>★</i></div>
+    </div>
+    <div id="helpBox" class="hidden"></div>
+    <div id="missionTop"><div id="timer"></div></div>
+    <div id="countdown"></div>
+    <div id="objective"></div>
+    <div id="minimap"><canvas id="mapCanvas"></canvas>
+      <div class="bars"><div id="hpBar" class="bar"><i></i></div><div id="carBar" class="bar car"><i></i></div></div>
+    </div>
+    <div id="speedo" class="hidden"><canvas id="speedCanvas"></canvas></div>
+    <div id="vehName"></div>
+    <div id="areaName"></div>
+    <div id="radioName"></div>
+    <div id="prompt"></div>
+    <div id="stuntPop"></div>
+    <div id="driftPop"></div>
+    <div id="bigMsg" class="hidden"><div class="t"></div><div class="s"></div></div>
+    <div id="missionCard" class="hidden"><div class="t"></div><div class="d"></div></div>
+    <div id="modeHint"></div>
+    <div id="fps"></div>
+  </div>
+
+  <!-- ================= TOUCH ================= -->
+  <div id="touch" class="hidden">
+    <div class="stick"><div class="knob"></div></div>
+    <div class="tbtns">
+      <button data-key="KeyF" class="tb big enter">F</button>
+      <button data-key="Space" class="tb">JUMP<br>DRIFT</button>
+      <button data-key="ShiftLeft" class="tb foot">RUN</button>
+      <button data-key="KeyH" class="tb car">HORN</button>
+      <button data-key="KeyV" class="tb sm">CAM</button>
+      <button data-key="KeyR" class="tb sm car">FLIP</button>
+      <button data-key="KeyQ" class="tb sm car">RADIO</button>
+    </div>
+    <button data-key="Escape" class="tb pauseBtn">❚❚</button>
+  </div>
+
+  <!-- ================= PAUSE (GTA style) ================= -->
+  <div id="pause" class="hidden">
+    <div class="pHead">
+      <div class="pTitle">BIG STEAL CAR</div>
+      <div class="pInfo"><span id="pArea"></span><span id="pTime"></span><b id="pCash"></b></div>
+    </div>
+    <div class="tabs">
+      <button data-tab="map">MAP</button><button data-tab="missions">MISSIONS</button><button data-tab="stats">STATS</button><button data-tab="settings">SETTINGS</button><button data-tab="controls">CONTROLS</button><button data-tab="game">GAME</button>
+    </div>
+    <div class="pBody">
+      <div class="pane" data-pane="map"><canvas id="fullMap"></canvas><div class="mapSide"><h4>LEGEND</h4>
+        <p><i style="background:#ffd60a">R</i> Race</p><p><i style="background:#38d39f">S</i> Stunt jump</p><p><i style="background:#ff4d6d">G</i> Getaway</p><p><i style="background:#7bdff2">S</i> Pay &amp; Spray</p><p><i style="background:#ffd23f">★</i> Star reset</p><p><i style="background:#2ecc71">♥</i> Health</p><p><i style="background:#4361ee">P</i> Police station</p><p><i style="background:#f8f9fa">+</i> Hospital</p>
+        <p class="dim">Click the map to set a GPS waypoint.</p><button id="clearWp" class="ghost">Clear waypoint</button></div></div>
+      <div class="pane" data-pane="missions"><div id="pauseMissions" class="mList"></div></div>
+      <div class="pane" data-pane="stats"><div id="statsList"></div></div>
+      <div class="pane" data-pane="settings"><div id="pauseSettings" class="setList"></div></div>
+      <div class="pane" data-pane="controls"><div id="pauseControls" class="ctlList"></div></div>
+      <div class="pane" data-pane="game"><div class="gameBtns"><button id="resumeBtn" class="primary">RESUME</button><button id="quitBtn">QUIT TO MAIN MENU</button></div></div>
+    </div>
+    <div class="pFoot"><kbd>Esc</kbd> Resume &nbsp; <kbd>Click</kbd> Select</div>
+  </div>
+
+  <!-- ================= MAIN MENU ================= -->
+  <div id="menu" class="hidden">
+    <div class="menuShade"></div>
+    <div class="letterbox top"></div><div class="letterbox bot"></div>
+    <div class="artPanels">
+      <div class="art a1"><svg viewBox="0 0 200 120"><defs><linearGradient id="gs" x1="0" x2="1"><stop offset="0" stop-color="#ffbe0b"/><stop offset="1" stop-color="#fb5607"/></linearGradient></defs><g stroke="#111" stroke-width="4" stroke-linejoin="round"><path d="M18 84 L30 60 Q36 50 52 48 L78 44 Q92 30 112 30 L140 32 Q156 34 166 48 L184 54 Q192 58 192 70 L192 84 Z" fill="url(#gs)"/><path d="M84 46 Q96 36 112 36 L134 37 Q146 40 152 48 Z" fill="#1c2a3a"/><circle cx="56" cy="86" r="15" fill="#222"/><circle cx="158" cy="86" r="15" fill="#222"/><circle cx="56" cy="86" r="6" fill="#ccc"/><circle cx="158" cy="86" r="6" fill="#ccc"/></g><g stroke="#fff" stroke-width="3" opacity=".8"><line x1="0" y1="56" x2="14" y2="56"/><line x1="2" y1="68" x2="12" y2="68"/><line x1="0" y1="78" x2="10" y2="78"/></g></svg><span>STEAL IT</span></div>
+      <div class="art a2"><svg viewBox="0 0 200 120"><g stroke="#111" stroke-width="4" stroke-linejoin="round"><path d="M100 10 L126 22 L154 18 L150 50 Q148 86 100 108 Q52 86 50 50 L46 18 L74 22 Z" fill="#1d4ed8"/><path d="M100 28 L106 46 L126 46 L110 58 L116 78 L100 66 L84 78 L90 58 L74 46 L94 46 Z" fill="#ffd60a"/></g><g fill="#ff2d55"><circle cx="24" cy="30" r="8"/></g><g fill="#2d7dff"><circle cx="176" cy="30" r="8"/></g></svg><span>ESCAPE IT</span></div>
+      <div class="art a3"><svg viewBox="0 0 200 120"><g stroke="#111" stroke-width="4" stroke-linejoin="round"><rect x="40" y="56" width="120" height="44" rx="5" fill="#4caf50" transform="rotate(-8 100 78)"/><rect x="34" y="44" width="120" height="44" rx="5" fill="#66bb6a" transform="rotate(6 94 66)"/><rect x="46" y="30" width="120" height="44" rx="5" fill="#81c784"/><circle cx="106" cy="52" r="15" fill="#e8f5e1"/></g><text x="106" y="61" text-anchor="middle" font-family="Anton,Impact" font-size="26" fill="#2d5a27">$</text></svg><span>CASH IT</span></div>
+    </div>
+    <div class="menuLeft">
+      <div class="logo">
+        <div class="logoBox"><div class="lw"><span>BIG</span><span>STEAL</span></div><div class="lc">CAR</div></div>
+        <div class="logoSub">SAN ALTEKZ</div>
+      </div>
+      <div id="menuMain" class="menuPanel">
+        <nav class="mainNav">
+          <button id="playBtn" class="primary">PLAY</button>
+          <button data-go="menuMissions">MISSIONS</button>
+          <button data-go="menuSettings">SETTINGS</button>
+          <button data-go="menuControls">CONTROLS</button>
+          <button data-go="menuCredits">CREDITS</button>
+        </nav>
+        <div class="menuFoot">Cash <b id="menuCash">$0</b> &nbsp;·&nbsp; <span class="dim">An Altekz Studios game · v<span id="ver"></span></span></div>
+      </div>
+      <div id="menuSettings" class="menuPanel hidden"><h3>SETTINGS</h3><div id="settingsList" class="setList"></div><button class="back" data-go="menuMain">◀ BACK</button></div>
+      <div id="menuControls" class="menuPanel hidden"><h3>CONTROLS</h3><div id="controlsList" class="ctlList"></div><button class="back" data-go="menuMain">◀ BACK</button></div>
+      <div id="menuMissions" class="menuPanel hidden"><h3>MISSIONS</h3><div id="missionList" class="mList"></div><p class="dim">Drive into a glowing marker in the city to start a mission.</p><button class="back" data-go="menuMain">◀ BACK</button></div>
+      <div id="menuCredits" class="menuPanel hidden"><h3>CREDITS</h3>
+        <div class="credits"><p><b>ALTEKZ STUDIOS</b></p><p>Design, code &amp; chaos</p><p class="dim">Built with three.js. Every model, texture and sound is generated in code: no image or audio files.</p><p class="dim">Big Steal Car is a parody. Any resemblance to a certain other car-stealing game is entirely on purpose.</p></div>
+        <button class="back" data-go="menuMain">◀ BACK</button></div>
+    </div>
+    <div class="tipBar"><b>TIP</b><span class="tipText"></span></div>
+  </div>
+
+  <!-- ================= LOADING (GTA style) ================= -->
+  <div id="loading" class="hidden">
+    <div class="loadArt"><div class="lp p1"><span>SAN ALTEKZ</span></div><div class="lp p2"><span>WELCOME TO THE CITY</span></div></div>
+    <div class="loadTip"><b>TIP</b><span class="tipText"></span></div>
+    <div class="loadSpin"><i></i><span>LOADING SAN ALTEKZ</span></div>
+  </div>
+
+  <!-- ================= INTRO / LOADING (Altekz Studios) ================= -->
+  <div id="intro">
+    <div class="intro-text">ALTEKZ STUDIOS</div>
+    <div class="intro-sub">presents</div>
+    <div class="intro-load"><div class="intro-bar"><i id="loadBar"></i></div><div id="loadText">Loading…</div></div>
+    <div class="intro-skip" id="introSkip">click to continue</div>
+  </div>
+
+  <div id="fatal" class="hidden"></div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
