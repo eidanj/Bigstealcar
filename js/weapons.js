@@ -131,6 +131,7 @@ export class Weapons {
     const g = this.g; const w = this.w; const cam = g.camera; const ch = g.player.char;
     this.lastShot = g.t;
     const o = cam.position.clone(); const dir = new V3(); cam.getWorldDirection(dir);
+    if (g.touch) { const a = this.assist(o, dir, w.range); if (a) dir.lerp(a, 0.85).normalize(); } // thumbs aren't mice: nudge toward a target near the crosshair
     const chest = ch.pos.clone().add(new V3(0, 1.3, 0)); const tMin = Math.max(0, chest.sub(o).dot(dir)) + 0.3;
     const muzzle = this.muzzlePos(); const moving = ch.speed > 1 ? 0.012 : 0;
     for (let i = 0; i < (w.pellets || 1); i++) {
@@ -148,6 +149,14 @@ export class Weapons {
     g.wanted.crime(5, g.wanted.stars === 0 ? '~r~Shots fired!~w~ The cops heard that.' : null, { type: 'shots' });
     for (const p of g.peds.list) { const dd = Math.hypot(p.pos.x - ch.pos.x, p.pos.z - ch.pos.z); if (dd < 45 && p.state === 'walk' && !p.naughty && p.brain.mode !== 'call') { p.panic = 4 + Math.random() * 3; p.brain.flee = [p.pos.x - ch.pos.x, p.pos.z - ch.pos.z]; } }
     for (const c of g.cars) if (c.ai && c.ai.cruise && Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z) < 35) c.ai.panicT = 9;
+  }
+  assist(o, dir, range) {
+    const g = this.g; let best = null, bc = Math.cos(0.13); const v = new V3();
+    for (const t of this.targets()) {
+      if (t.state !== 'walk' || !t.visible) continue; v.set(t.pos.x - o.x, t.pos.y + 1.2 - o.y, t.pos.z - o.z); const d = v.length(); if (d < 1.5 || d > range) continue;
+      const c = v.dot(dir) / d; if (c > bc && g.world.raycast(o.x, o.y, o.z, t.pos.x, t.pos.y + 1.2, t.pos.z) >= 1) { bc = c; best = v.clone().divideScalar(d); }
+    }
+    return best;
   }
   targets() { const g = this.g; const t = this._t || (this._t = []); t.length = 0; for (const p of g.peds.list) t.push(p); for (const c of g.peds.cops) t.push(c); return t; }
   raycast(o, d, tMin, tMax, ignore) {

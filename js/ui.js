@@ -28,12 +28,18 @@ const CONTROLS = [
   ['Weapons', [['Left mouse', 'Punch / shoot'], ['Right mouse', 'Aim (over the shoulder)'], ['1-6 / wheel', 'Switch weapon'], ['R', 'Reload'], ['F at a counter', 'Shop at Blast Barn']]],
   ['General', [['M', 'Map + waypoint'], ['Esc / P', 'Pause menu'], ['Click', 'Capture the mouse']]],
 ];
+const TOUCH_CONTROLS = [
+  ['On foot', [['Left stick', 'Move (push to the edge to sprint)'], ['Drag right side', 'Look around'], ['FIRE', 'Punch / shoot (drag it to aim while firing)'], ['AIM', 'Aim over the shoulder (tap to toggle)'], ['JUMP', 'Jump'], ['F', 'Steal a car / shop (or tap the prompt)'], ['SWAP · RELOAD', 'Switch weapon · reload']]],
+  ['Driving', [['GAS / BRAKE', 'Right thumb, slide between them (hold BRAKE to reverse)'], ['◀ ▶', 'Left thumb steering, slide between them'], ['DRIFT', 'Handbrake slide'], ['EXIT', 'Get out (bail out at speed)'], ['Signal arrows · ⚠', 'Turn signals · hazard lights'], ['HORN · RADIO · CAM', 'Horn, radio station, camera view'], ['FLIP', 'Appears when your car is on its roof'], ['Drag the screen', 'Look around the car']]],
+  ['General', [['❚❚', 'Pause menu + map (tap the map to set a waypoint)'], ['⛶', 'Full screen on / off (if your browser supports it)']]],
+];
 const OPTS = {
   quality: [['low', 'LOW'], ['medium', 'MEDIUM'], ['high', 'HIGH'], ['ultra', 'ULTRA']],
   time: [['dynamic', 'DAY/NIGHT CYCLE'], ['day', 'MIDDAY'], ['sunset', 'GOLDEN HOUR'], ['night', 'NIGHT'], ['dawn', 'DAWN']],
   dayMinutes: [[12, '12 MIN'], [24, '24 MIN'], [48, '48 MIN']],
   units: [['mph', 'MPH'], ['kmh', 'KM/H']],
   invertY: [[false, 'OFF'], [true, 'ON']], showFps: [[false, 'OFF'], [true, 'ON']],
+  touch: [['auto', 'AUTO'], ['on', 'ON'], ['off', 'OFF']],
 };
 
 export class UI {
@@ -42,10 +48,11 @@ export class UI {
     $('#ver').textContent = VERSION;
     document.querySelectorAll('[data-go]').forEach((b) => b.addEventListener('click', () => { this.g.audio.ui(); this.go(b.dataset.go); }));
     document.querySelectorAll('.mainNav button').forEach((b) => b.addEventListener('mouseenter', () => this.g.audio.ui()));
-    $('#playBtn').addEventListener('click', () => { this.g.audio.ui(); this.g.startPlay(); });
+    $('#playBtn').addEventListener('click', () => { this.g.audio.ui(); this.g.firstPlayFullscreen(); this.g.startPlay(); });
     // pause tabs
     document.querySelectorAll('#pause .tabs button').forEach((b) => b.addEventListener('click', () => { this.g.audio.ui(); this.tab(b.dataset.tab); }));
     $('#resumeBtn').addEventListener('click', () => this.g.resume());
+    $('#pResume').addEventListener('click', () => this.g.resume());
     $('#quitBtn').addEventListener('click', () => this.g.quitToMenu());
     $('#clearWp').addEventListener('click', () => { this.g.hud.waypoint = null; this.drawMap(); });
     const mc = $('#fullMap');
@@ -67,7 +74,7 @@ export class UI {
 
   buildControls(root) {
     root.innerHTML = '';
-    for (const [title, rows] of CONTROLS) {
+    for (const [title, rows] of (this.g.touch ? TOUCH_CONTROLS.concat([['Keyboard', []]], CONTROLS) : CONTROLS)) {
       const sec = el('div', 'ctlSec'); sec.appendChild(el('h4', '', title));
       for (const [k, v] of rows) sec.appendChild(el('div', 'ctlRow', `<span>${v}</span><b>${k.split(' / ').map((x) => `<kbd>${x}</kbd>`).join(' ')}</b>`));
       root.appendChild(sec);
@@ -93,8 +100,8 @@ export class UI {
     };
     pick('quality', 'Graphics quality'); pick('time', 'Time of day'); pick('dayMinutes', 'Length of a day');
     slider('volume', 'Master volume', 0, 1, 0.05, (v) => `${Math.round(v * 100)}`); slider('music', 'Radio & music', 0, 1, 0.05, (v) => `${Math.round(v * 100)}`);
-    slider('sens', 'Mouse sensitivity', 0.3, 3, 0.1, (v) => v.toFixed(1)); pick('invertY', 'Invert look');
-    slider('fov', 'Field of view', 50, 80, 1, (v) => `${v}°`); pick('units', 'Speed units'); pick('showFps', 'Show FPS');
+    slider('sens', 'Look sensitivity', 0.3, 3, 0.1, (v) => v.toFixed(1)); pick('invertY', 'Invert look');
+    slider('fov', 'Field of view', 50, 80, 1, (v) => `${v}°`); pick('units', 'Speed units'); pick('showFps', 'Show FPS'); pick('touch', 'Touch controls');
   }
   syncSettings(except) { for (const r of document.querySelectorAll('.setRow')) if (r !== except && r._upd) r._upd(); }
 

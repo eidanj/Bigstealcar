@@ -8,7 +8,7 @@ const EXT = LIMIT + 30; // map extent (m)
 
 export function fmt(s) { // GTA-style colour codes: ~y~ yellow, ~g~ green, ~r~ red, ~b~ blue, ~w~ white; [F] key caps
   let out = '', open = false;
-  const parts = String(s).replace(/\[([A-Za-z0-9 ,./]{1,6})\]/g, '<kbd>$1</kbd>').split(/~([ygrbw])~/);
+  const parts = String(s).replace(/\[([^\[\]~<>]{1,6})\]/g, '<kbd>$1</kbd>').split(/~([ygrbw])~/);
   for (let i = 0; i < parts.length; i++) {
     if (i % 2 === 0) out += parts[i];
     else { if (open) out += '</span>'; open = parts[i] !== 'w'; if (open) out += `<span class="c-${parts[i]}">`; }
@@ -114,9 +114,11 @@ export class HUD {
         : fmt('<b>ON FOOT</b> [W][A][S][D] move · [Shift] sprint · [Space] jump · [F] steal a car · [LMB] punch / shoot · [RMB] aim · [1]-[6] weapons · [M] map'); h.classList.remove('faded'); }
     if (this.modeT > 0) { this.modeT -= dt; if (this.modeT <= 0) document.getElementById('modeHint').classList.add('faded'); }
     this.drawMinimap(); if (car) this.drawSpeedo(car); this.spC.parentElement.classList.toggle('hidden', !car);
+    const flip = !!car && (car.upsideT > 0.6 || (car.up.y < 0.75 && car.speed < 3)); if (flip !== this._flip) { this._flip = flip; document.body.classList.toggle('canflip', flip); }
   }
   weapon(flash) {
     const W = this.g.weapons; const k = W.cur; const a = W.ammo[k]; const key = k + (a ? `${a.mag}/${a.res}` : '') + (W.reloadT > 0 ? 'r' : '');
+    const melee = !!W.w.melee; if (melee !== this._melee) { this._melee = melee; document.body.classList.toggle('melee', melee); }
     if (key === this._wk && !flash) return; this._wk = key;
     if (this.wIcon.dataset.k !== k) { this.wIcon.innerHTML = wsvg(k); this.wIcon.dataset.k = k; }
     this.wAmmo.innerHTML = a ? (W.reloadT > 0 ? '<small>RELOADING</small>' : `${a.mag}<small> / ${a.res}</small>`) : '';
@@ -124,7 +126,10 @@ export class HUD {
   }
   hitMarker(head) { this.hitEl.classList.toggle('head', !!head); this.hitEl.classList.remove('show'); void this.hitEl.offsetWidth; this.hitEl.classList.add('show'); }
   help(text, t = 3) { if (this.helpText !== text || this.helpEl.classList.contains('hidden')) { this.helpEl.innerHTML = fmt(text); this.helpText = text; } this.helpEl.classList.remove('hidden'); this.helpT = Math.max(this.helpT, t); }
-  prompt(text) { if (text) { const h = fmt(text); if (this.promptEl.innerHTML !== h) this.promptEl.innerHTML = h; this.promptEl.classList.add('show'); } else this.promptEl.classList.remove('show'); }
+  prompt(text) {
+    if (text) { const h = fmt(text); if (this.promptEl.innerHTML !== h) this.promptEl.innerHTML = h; this.promptEl.classList.add('show'); } else this.promptEl.classList.remove('show');
+    const on = !!text; if (on !== this._prompting) { this._prompting = on; document.body.classList.toggle('prompting', on); }
+  }
   objective(t) { this.objEl.innerHTML = fmt(t || ''); }
   timer(t) { if (t == null) { this.timerEl.textContent = ''; this.timerEl.classList.remove('urgent'); return; } const m = Math.floor(t / 60), s = Math.floor(t % 60); this.timerEl.textContent = `${m}:${String(s).padStart(2, '0')}`; this.timerEl.classList.toggle('urgent', t < 10); }
   countdown(v) { if (this._cd === v) return; this._cd = v; this.cdEl.textContent = v > 0 || v === 'GO' ? v : ''; this.cdEl.classList.remove('pop'); void this.cdEl.offsetWidth; this.cdEl.classList.add('pop'); this.cdT = v === 'GO' ? 1 : 2; if (v !== 'GO' && v > 0) this.g.audio.beep(); }

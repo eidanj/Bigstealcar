@@ -101,7 +101,7 @@ export const WANTED = {
 
 export const DEFAULT_SETTINGS = {
   quality: 'high', time: 'dynamic', dayMinutes: 24, volume: 0.8, music: 0.45, sfx: 1,
-  sens: 1, invertY: false, units: 'mph', fov: 62, showFps: false, radio: true,
+  sens: 1, invertY: false, units: 'mph', fov: 62, showFps: false, radio: true, touch: 'auto',
 };
 
 // Weapons (teen rating: hits knock people out, nobody gets hurt for real). dmg is per bullet/pellet against 100 health.

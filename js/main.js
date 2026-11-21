@@ -42,7 +42,7 @@ class Game {
   constructor() {
     this.settings = { ...DEFAULT_SETTINGS, ...(JSON.parse(localStorage.getItem('bsc_settings') || '{}')) };
     const sv = JSON.parse(localStorage.getItem('bsc_save_v1') || '{}');
-    this.cash = sv.cash ?? 250; this.save = { done: sv.done || {}, tutDone: !!sv.tutDone, weapons: sv.weapons || {} }; this.npcs = []; this.touch = isTouch();
+    this.cash = sv.cash ?? 250; this.save = { done: sv.done || {}, tutDone: !!sv.tutDone, weapons: sv.weapons || {} }; this.npcs = []; this.touch = false; this.fsAsked = false;
     this.stats = { earned: 0, missions: 0, stolen: 0, topSpeed: 0, dist: 0, longestJump: 0, maxAir: 0, bestDrift: 0, knocked: 0, lights: 0, escapes: 0, busted: 0, ko: 0, ...(sv.stats || {}) };
     this.state = 'boot'; this.cars = []; this.playerCar = null; this.lastCar = null; this.lockControls = 0; this.cinematic = null; this.timeScale = 1;
     this.focus = new V3(0, 0, 0); this.night = 0; this.bustT = 0; this.carBustT = 0; this.t = 0; this.saveT = 0; this.tutorial = 0; this.tutT = 0; this.frameN = 0;
@@ -55,7 +55,8 @@ class Game {
     const intro = $('#intro'); requestAnimationFrame(() => requestAnimationFrame(() => intro.classList.add('show')));
     const t0 = performance.now(); const bar = $('#loadBar'), txt = $('#loadText');
     const progress = (p, label) => { bar.style.width = `${Math.round(p * 100)}%`; if (label) txt.textContent = label; };
-    if (isTouch()) { document.body.classList.add('touch'); if (!localStorage.getItem('bsc_settings')) this.settings.quality = 'medium'; }
+    if (this.wantTouch() && !localStorage.getItem('bsc_settings')) this.settings.quality = 'medium';
+    this.applyTouchMode();
     this.buildRenderer(); progress(0.02, 'Starting engines');
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(62, innerWidth / innerHeight, 0.2, 8000);
@@ -98,11 +99,33 @@ class Game {
     };
     intro.addEventListener('click', go); addEventListener('keydown', go);
     addEventListener('resize', () => this.resize());
-    document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && this.state === 'play' && !isTouch() && !this.ignoreUnlock) this.pause('map'); this.ignoreUnlock = false; });
+    document.addEventListener('pointerlockchange', () => { if (!document.pointerLockElement && this.state === 'play' && !this.touch && !this.ignoreUnlock) this.pause('map'); this.ignoreUnlock = false; });
     document.addEventListener('visibilitychange', () => { if (document.hidden && this.state === 'play') this.pause('map'); });
     this.renderer.domElement.addEventListener('click', () => { if (this.state === 'play') this.input.lock(); });
+    this.input.touch = this.touch; this.input.onFullscreenBtn = () => this.toggleFullscreen();
+    for (const ev of ['fullscreenchange', 'webkitfullscreenchange']) document.addEventListener(ev, () => setTimeout(() => this.resize(), 60));
     addEventListener('keydown', (e) => { if (this.state === 'shop' && (e.code === 'Escape' || e.code === 'KeyF' || e.code === 'KeyE') && !e.repeat) { e.preventDefault(); this.closeShop(); return; } if (this.state === 'paused' && (e.code === 'Escape' || e.code === 'KeyP') && !e.repeat) { e.preventDefault(); this.resume(); } else if (this.state === 'paused' && e.code === 'KeyM' && this.ui.curTab !== 'map') this.ui.tab('map'); });
   }
+
+  // ---------- touch + full screen ----------
+  wantTouch() { const q = new URLSearchParams(location.search).get('touch'); if (q === '1') return true; if (q === '0') return false; const t = this.settings.touch || 'auto'; return t === 'on' || (t === 'auto' && isTouch()); }
+  applyTouchMode() {
+    this.touch = this.wantTouch(); document.body.classList.toggle('touch', this.touch);
+    if (this.input) { this.input.touch = this.touch; if (!this.touch && this.input.releaseTouches) this.input.releaseTouches(); }
+    const t = $('#touch'); if (t) t.classList.toggle('hidden', !this.touch);
+    document.body.classList.toggle('nofs', !this.canFullscreen());
+  }
+  canFullscreen() { const d = document, e = d.documentElement; return !!(e.requestFullscreen || e.webkitRequestFullscreen) && (d.fullscreenEnabled ?? d.webkitFullscreenEnabled ?? true) !== false; }
+  isFullscreen() { return !!(document.fullscreenElement || document.webkitFullscreenElement); }
+  // Full screen is asked for exactly once (the first Play tap) and from the on-screen button. If you leave it — edge
+  // swipe, Esc, the browser's own button — the game never pulls you back in.
+  goFullscreen() {
+    const e = document.documentElement; const req = e.requestFullscreen || e.webkitRequestFullscreen; if (!req) return;
+    try { const pr = req.call(e, { navigationUI: 'hide' }); if (pr && pr.then) pr.then(() => { try { const o = screen.orientation; if (o && o.lock) o.lock('landscape').catch(() => {}); } catch (err) { /* not supported */ } }).catch(() => {}); } catch (err) { /* refused */ }
+  }
+  exitFullscreen() { const d = document; const ex = d.exitFullscreen || d.webkitExitFullscreen; if (ex && this.isFullscreen()) { try { const pr = ex.call(d); if (pr && pr.catch) pr.catch(() => {}); } catch (err) { /* ignore */ } } }
+  toggleFullscreen() { if (this.isFullscreen()) this.exitFullscreen(); else this.goFullscreen(); }
+  firstPlayFullscreen() { if (this.touch && !this.fsAsked && this.canFullscreen() && !this.isFullscreen()) { this.fsAsked = true; this.goFullscreen(); } this.fsAsked = true; }
 
   buildRenderer() {
     // near-field cap for point/spot lights: a lamp a metre from a surface lights it like one ~2 m away instead of
@@ -137,6 +160,7 @@ class Game {
       this.scene.traverse((o) => { if (o.material) { const ms = Array.isArray(o.material) ? o.material : [o.material]; ms.forEach((m) => { m.needsUpdate = true; }); } });
     }
     if ((key === 'all' || key === 'time') && this.state !== 'menu' && this.state !== 'intro' && this.state !== 'boot') this.env.setTimeMode(s.time);
+    if (key === 'touch') { this.applyTouchMode(); this.hud && this.hud.resize(); }
     if (key === 'all' || key === 'volume' || key === 'music') this.audio.setVolume(s.volume, s.music);
     if (key === 'showFps') this.hud.fpsEl.textContent = '';
   }
@@ -170,22 +194,23 @@ class Game {
       try { this.renderer.compile(this.scene, this.camera); } catch (e) { /* ignore */ }
       setTimeout(() => {
         this.ui.loading(false); this.hud.show(true); this.hud.shownCash = this.cash; this.state = 'play'; this.tutorial = this.save.tutDone ? 99 : 0; this.tutT = 0.5;
-        document.body.classList.toggle('touchOn', isTouch()); $('#touch').classList.toggle('hidden', !isTouch());
+        this.applyTouchMode();
         if (this.save.tutDone) this.hud.help(`Welcome back to ~y~San Altekz~w~. You have ~g~${fmtMoney(this.cash)}~w~.`, 4);
       }, 900);
     }, 500);
   }
   clearCity() { for (const c of [...this.cars]) this.removeCar(c, true); this.peds.clear(); this.playerCar = null; this.lastCar = null; this.wanted.clear(true); this.missions.abort(); }
-  pause(tab) { if (this.state !== 'play') return; this.state = 'paused'; this.input.unlock(); this.ui.openPause(tab); this.audio.ui(); }
-  resume() { if (this.state !== 'paused') return; this.ui.closePause(); this.state = 'play'; this.input.hits.clear(); this.input.keys.clear(); this.last = performance.now(); this.input.lock(); }
+  pause(tab) { if (this.state !== 'play') return; this.state = 'paused'; this.input.unlock(); this.releaseTouches(); this.ui.openPause(tab); this.audio.ui(); }
+  resume() { if (this.state !== 'paused') return; this.ui.closePause(); this.state = 'play'; this.input.hits.clear(); this.input.keys.clear(); this.releaseTouches(); this.last = performance.now(); this.input.lock(); }
+  releaseTouches() { if (this.input && this.input.releaseTouches) this.input.releaseTouches(); }
   quitToMenu() {
     this.ui.closePause(); this.hud.show(false); $('#touch').classList.add('hidden'); this.missions.abort(); this.wanted.clear(true); this.saveGame();
     if (this.playerCar) this.exitCar(true); this.player.char.visible = false; this.state = 'menu'; this.audio.menuMode = true; this.rig.setMode('menu'); this.rig.blend = 1; this.menuEnv(true);
     this.focus.set(0, 0, 0); this.ui.showMenu(); this.cinematic = null; this.timeScale = 1; this.grade.uniforms.uDesat.value = 0;
   }
   saveGame() { localStorage.setItem('bsc_save_v1', JSON.stringify({ cash: this.cash, stats: this.stats, done: this.save.done, tutDone: this.save.tutDone, weapons: this.weapons ? this.weapons.save() : this.save.weapons })); }
-  openShop(st) { if (this.state !== 'play') return; this.state = 'shop'; this.shopStore = st; this.hud.prompt(''); this.input.unlock(); this.ui.openShop(); this.audio.register(); }
-  closeShop() { if (this.state !== 'shop') return; this.ui.closeShop(); this.state = 'play'; this.input.hits.clear(); this.input.keys.clear(); this.last = performance.now(); this.input.lock(); this.saveGame(); }
+  openShop(st) { if (this.state !== 'play') return; this.state = 'shop'; this.shopStore = st; this.hud.prompt(''); this.input.unlock(); this.releaseTouches(); this.ui.openShop(); this.audio.register(); }
+  closeShop() { if (this.state !== 'shop') return; this.ui.closeShop(); this.state = 'play'; this.input.hits.clear(); this.input.keys.clear(); this.releaseTouches(); this.last = performance.now(); this.input.lock(); this.saveGame(); }
   addCash(n, why) { if (!n) return; this.cash = Math.max(0, this.cash + n); if (n > 0) this.stats.earned += n; this.hud.cashDelta(n); void why; }
 
   // ======================= spawning =======================
@@ -235,7 +260,7 @@ class Game {
     car.role = 'player'; car.driver = 'player'; car.wake(); if (car.slot) { car.slot.used = false; car.slot = null; }
     this.playerCar = car; this.lastCar = car; p.char.seatIn(car, 1); p.char.visible = true;
     this.rig.setMode('car'); this.rig.yaw = Math.atan2(car.fwd.x, car.fwd.z); this.hud.vehicle(car.type.name); this.hud.prompt(''); this.audio.door();
-    document.body.classList.add('driving');
+    document.body.classList.add('driving'); this.releaseTouches();
     if (this.tutorial === 1) { this.tutorial = 2; this.tutT = 1.5; }
   }
   exitCar(silent) {
@@ -245,7 +270,7 @@ class Game {
     if (W.insideBuilding(door.x, door.z, 0.4)) door = car.pos.clone().add(new V3(0, car.type.H, 0));
     ch.state = 'walk'; ch.scale = 1; ch.carT = null; ch.pos.set(door.x, Math.max(W.ground(door.x, door.z), door.y - car.comH), door.z); ch.vel.set(0, 0, 0); ch.yaw = Math.atan2(car.left.x * side, car.left.z * side);
     car.driver = null; car.role = 'parked'; car.ctrl.throttle = 0; car.ctrl.brake = 0; car.ctrl.steer = 0; car.ctrl.handbrake = false;
-    this.playerCar = null; this.rig.setMode('foot'); this.rig.yaw = Math.atan2(car.fwd.x, car.fwd.z); document.body.classList.remove('driving');
+    this.playerCar = null; this.rig.setMode('foot'); this.rig.yaw = Math.atan2(car.fwd.x, car.fwd.z); document.body.classList.remove('driving'); this.releaseTouches();
     if (!silent && sp > 5) { // bail out!
       ch.knock(car.vel.clone().multiplyScalar(0.75).addScaledVector(car.left, 3 * side).add(new V3(0, 2.5, 0)), 0.8);
       if (sp > 14) this.player.hurt((sp - 14) * 2.5, 'bail');
@@ -459,16 +484,21 @@ class Game {
       if (inp.hit('KeyQ')) this.hud.radio(this.audio.nextStation());
       if (inp.hit('Comma')) car.setSignal('L'); if (inp.hit('Period')) car.setSignal('R'); if (inp.hit('Slash')) car.hazard = !car.hazard;
       if (inp.hit('KeyR') && (car.up.y < 0.6 || car.speed < 3)) car.flip();
-      if (car.upsideT > 1.5) this.hud.help('Press [R] to flip your car back over.', 0.3);
+      if (car.upsideT > 1.5) this.hud.help(this.touch ? 'Tap [FLIP] to put your car back on its wheels.' : 'Press [R] to flip your car back over.', 0.3);
       if (inp.down('KeyH')) for (const h of this.peds.list) if (h.state === 'walk' && Math.hypot(h.pos.x - car.pos.x, h.pos.z - car.pos.z) < 14 && Math.random() < 0.02) { if (Math.random() < 0.5) h.wave = 1.2; else h.panic = 1.2; }
     } else p.updateFoot(dt, inp);
     // tutorial hints
     this.tutT -= dt;
     if (this.tutorial < 99 && this.tutT <= 0) {
-      if (this.tutorial === 0) { this.hud.help(`Welcome to ~y~San Altekz~w~. That red ~y~${this.starter ? this.starter.type.name : 'car'}~w~ looks lonely. Walk up to it and press [F] to steal it.`, 7); this.tutorial = 1; this.tutT = 14; }
-      else if (this.tutorial === 1) { if (!this.playerCar) { this.hud.help('Press [F] next to any car to steal it.', 4); this.tutT = 14; } }
+      const T = this.touch;
+      if (this.tutorial === 0) { this.hud.help(`Welcome to ~y~San Altekz~w~. That red ~y~${this.starter ? this.starter.type.name : 'car'}~w~ looks lonely. ${T ? 'Walk up to it with the left stick and tap [F]' : 'Walk up to it and press [F]'} to steal it.`, 7); this.tutorial = 1; this.tutT = 14; }
+      else if (this.tutorial === 1) { if (!this.playerCar) { this.hud.help(T ? 'Tap [F] next to any car to steal it.' : 'Press [F] next to any car to steal it.', 4); this.tutT = 14; } }
       else if (this.tutorial <= 5) {
-        const tips = ['[W] [S] drive and reverse, [A] [D] steer, hold [Space] to drift. [H] horn, [V] camera, [Q] radio.',
+        const tips = T ? ['Hold ~g~GAS~w~ and ~r~BRAKE~w~ on the right, steer with the arrows on the left. Slide your thumb between them. ~y~DRIFT~w~ slides the car.',
+          'Hit ~y~ramps~w~ and pull long ~b~drifts~w~ for cash. Cause trouble and a witness might ~y~call the cops~w~. Knock them out before they finish the call!',
+          'Drive into a glowing marker to start a mission: ~y~R~w~ races, ~g~S~w~ stunt jumps, ~r~G~w~ getaways. Tap [❚❚] for the map.',
+          'On foot: left stick to move (push to the edge to sprint), drag the right side to look. ~r~FIRE~w~ punches or shoots, ~y~AIM~w~ zooms in. Guns are sold at ~y~Blast Barn~w~ stores.']
+          : ['[W] [S] drive and reverse, [A] [D] steer, hold [Space] to drift. [H] horn, [V] camera, [Q] radio.',
           'Hit ~y~ramps~w~ and pull long ~b~drifts~w~ for cash. Cause trouble and a witness might ~y~call the cops~w~. Knock them out before they finish the call!',
           'Drive into a glowing marker to start a mission: ~y~R~w~ races, ~g~S~w~ stunt jumps, ~r~G~w~ getaways. Press [M] for the map.',
           'Need firepower? Walk into a ~y~Blast Barn~w~ gun store (orange ~y~A~w~ on the map). Left click punches or shoots, right click aims.'];
@@ -480,6 +510,7 @@ class Game {
     requestAnimationFrame((t) => this.frame(t));
     let dt = Math.min(0.05, (now - this.last) / 1000); this.last = now; if (!(dt > 0)) dt = 1 / 60;
     this.fps = damp(this.fps || 60, 1 / dt, 3, dt); this.frameN++;
+    const inplay = this.state === 'play'; if (inplay !== this._inplay) { this._inplay = inplay; document.body.classList.toggle('inplay', inplay); if (!inplay) this.releaseTouches(); }
     try {
       if (this.state !== 'paused' && this.state !== 'loading' && this.state !== 'shop') {
         const sdt = dt * this.timeScale; this.sim(sdt);
