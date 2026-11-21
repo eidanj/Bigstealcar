@@ -49,6 +49,63 @@ function bluntTips(p, cut) {
 }
 
 // ---------- geometry builder (positions, normals, uvs, colors) ----------
+// ---- surface shaders: world-space variation so big flat areas don't show their texture repeating ----
+const HASH = 'float bscHash( vec2 p ) { return fract( sin( dot( p, vec2( 127.1, 311.7 ) ) ) * 43758.5453 ); }';
+function surfaceShader(mat, kind, noise) {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uNoise = { value: noise };
+    sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vWP;')
+      .replace('#include <project_vertex>', '#include <project_vertex>\n vWP = ( modelMatrix * vec4( transformed, 1.0 ) ).xyz;');
+    let pre = 'uniform sampler2D uNoise; varying vec3 vWP;\n' + HASH, mapc = '', rough = '';
+    if (kind === 'asphalt') {
+      // second, rotated sample of the same map blended by large blobs (kills the 12 m repeat), macro tone,
+      // and the odd darker rectangular utility patch with a sealed seam round it
+      mapc = `vec4 bnA = texture2D( uNoise, vWP.xz / 150.0 ), bnB = texture2D( uNoise, vWP.xz / 41.0 + 0.5 );
+        #ifdef USE_MAP
+          vec4 t1 = texture2D( map, vMapUv ), t2 = texture2D( map, mat2( 0.8, -0.6, 0.6, 0.8 ) * vMapUv * 0.73 + 0.37 );
+          diffuseColor *= mix( t1, t2, smoothstep( 0.38, 0.62, bnA.g ) );
+        #endif
+        diffuseColor.rgb *= 1.0 + ( bnA.r - 0.5 ) * 0.3 + ( bnB.g - 0.5 ) * 0.16;
+        vec2 cl = floor( vWP.xz / 16.0 ), fc = fract( vWP.xz / 16.0 );
+        vec2 lo = vec2( bscHash( cl + 3.1 ), bscHash( cl + 7.7 ) ) * 0.5 + 0.05, sz = vec2( bscHash( cl + 11.3 ), bscHash( cl + 5.9 ) ) * 0.3 + 0.12;
+        vec2 dd = min( fc - lo, lo + sz - fc ); float dm = min( dd.x, dd.y ), hasP = step( 0.9, bscHash( cl ) );
+        float inP = hasP * step( 0.0, dm ), seam = hasP * ( 1.0 - smoothstep( 0.002, 0.007, abs( dm ) ) );
+        diffuseColor.rgb *= mix( 1.0, 0.7 + bnB.b * 0.12, inP ) * ( 1.0 - seam * 0.5 );`;
+      rough = 'roughnessFactor *= mix( 1.0, 0.86, max( inP, seam ) );';
+    } else if (kind === 'sidewalk') {
+      // every 2 m slab its own shade, broad weathering, and stains that wander across slabs
+      mapc = `#ifdef USE_MAP
+          diffuseColor *= texture2D( map, vMapUv );
+        #endif
+        vec4 bn = texture2D( uNoise, vWP.xz / 60.0 ), st = texture2D( uNoise, vWP.xz / 23.0 + 0.3 );
+        float slab = bscHash( floor( vMapUv * 2.0 ) + 0.5 );
+        diffuseColor.rgb *= ( 1.0 + ( slab - 0.5 ) * 0.12 + ( bn.r - 0.5 ) * 0.18 ) * ( 1.0 - st.a * 0.2 );`;
+      rough = 'roughnessFactor *= 1.0 - st.a * 0.15;';
+    } else if (kind === 'curb') {
+      mapc = `#ifdef USE_MAP
+          diffuseColor *= texture2D( map, vMapUv );
+        #endif
+        vec4 bn = texture2D( uNoise, vWP.xz / 30.0 + vWP.y * 0.1 );
+        diffuseColor.rgb *= 1.0 + ( bn.g - 0.5 ) * 0.2 - smoothstep( 0.12, 0.0, vWP.y ) * 0.25;`;
+    } else if (kind === 'facade') {
+      // whole walls vary a little (no two floors identical), and the street level is dirtier: splash-back,
+      // exhaust soot and grime fading out over the first few metres
+      mapc = `#ifdef USE_MAP
+          diffuseColor *= texture2D( map, vMapUv );
+        #endif
+        vec2 wq = vec2( vWP.x + vWP.z, vWP.y * 1.6 );
+        vec4 bn = texture2D( uNoise, wq / 70.0 ), bf = texture2D( uNoise, wq / 9.0 );
+        float street = smoothstep( 4.0, 0.2, vWP.y ) * ( 0.55 + 0.45 * bf.g );
+        diffuseColor.rgb *= ( 1.0 + ( bn.r - 0.5 ) * 0.16 + ( bn.g - 0.5 ) * 0.08 ) * ( 1.0 - street * 0.3 );`;
+      rough = 'roughnessFactor = mix( roughnessFactor, 1.0, street * 0.5 );';
+    }
+    sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\n' + pre).replace('#include <map_fragment>', mapc);
+    if (rough) sh.fragmentShader = sh.fragmentShader.replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n' + rough);
+  };
+  mat.customProgramCacheKey = () => 'bsc-surf-' + kind;
+  return mat;
+}
+
 class GB {
   constructor() { this.p = []; this.n = []; this.u = []; this.c = []; this.i = []; }
   quad(a, b, c, d, n, u0, u1, v0, v1, col = [1, 1, 1]) {
@@ -342,12 +399,13 @@ export class World {
   }
 
   makeMaterials() {
-    const a = TX.asphalt(); this.asphaltTex = a;
+    const a = TX.asphalt(); this.asphaltTex = a; const nt = TX.noiseTex(); this.noiseTex = nt;
     this.mat = {};
-    this.mat.asphalt = new THREE.MeshStandardMaterial({ map: a.map, normalMap: a.normalMap, roughnessMap: a.roughnessMap, roughness: 1, metalness: 0, normalScale: new THREE.Vector2(0.6, 0.6) });
+    this.mat.asphalt = surfaceShader(new THREE.MeshStandardMaterial({ map: a.map, normalMap: a.normalMap, roughnessMap: a.roughnessMap, roughness: 1, metalness: 0, normalScale: new THREE.Vector2(0.6, 0.6) }), 'asphalt', nt);
     const cw = TX.concrete(2, 150); const cw2 = TX.concrete(1, 130);
-    this.mat.sidewalk = new THREE.MeshStandardMaterial({ map: cw.map, normalMap: cw.normalMap, roughness: 0.92, vertexColors: true });
-    this.mat.curb = new THREE.MeshStandardMaterial({ map: cw2.map, roughness: 0.9, color: 0xd8d6d0 });
+    this.mat.sidewalk = surfaceShader(new THREE.MeshStandardMaterial({ map: cw.map, normalMap: cw.normalMap, roughness: 0.92, vertexColors: true }), 'sidewalk', nt);
+    this.mat.curb = surfaceShader(new THREE.MeshStandardMaterial({ map: cw2.map, normalMap: cw2.normalMap, normalScale: new THREE.Vector2(0.6, 0.6), roughness: 0.9, color: 0xd8d6d0 }), 'curb', nt);
+    this.mat.wear = new THREE.MeshStandardMaterial({ map: TX.laneWear(), transparent: true, depthWrite: false, roughness: 0.55, metalness: 0, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1 });
     const gr = TX.grass(); this.mat.grass = new THREE.MeshStandardMaterial({ map: gr.map, normalMap: gr.normalMap, roughness: 0.95 });
     this.mat.roof = new THREE.MeshStandardMaterial({ map: TX.gravel(), roughness: 0.95, vertexColors: true });
     this.mat.props = new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.65, metalness: 0.2 });
@@ -360,11 +418,11 @@ export class World {
     this.facade = {};
     for (const s of this.styles) {
       const f = TX.facade(s, this.styles.indexOf(s) + 1);
-      const m = new THREE.MeshStandardMaterial({ map: f.map, emissiveMap: f.emissiveMap, emissive: 0xffffff, emissiveIntensity: 0, roughnessMap: f.rm, metalnessMap: f.rm, roughness: 1, metalness: 1, vertexColors: true });
+      const m = surfaceShader(new THREE.MeshStandardMaterial({ map: f.map, emissiveMap: f.emissiveMap, emissive: 0xffffff, emissiveIntensity: 0, roughnessMap: f.rm, metalnessMap: f.rm, normalMap: f.normalMap, normalScale: new THREE.Vector2(1, -1), roughness: 1, metalness: 1, vertexColors: true }), 'facade', nt);
       this.facade[s] = { mat: m, tw: f.tileW, th: f.tileH, gb: new GB() }; this.facadeMats.push(m);
     }
     this.shops = [];
-    for (let i = 0; i < 6; i++) { const f = TX.shopfront(i * 2 + 1); const m = new THREE.MeshStandardMaterial({ map: f.map, emissiveMap: f.emissiveMap, emissive: 0xffffff, emissiveIntensity: 0, roughnessMap: f.rm, metalnessMap: f.rm, roughness: 1, metalness: 1 }); this.shops.push({ mat: m, gb: new GB() }); this.facadeMats.push(m); }
+    for (let i = 0; i < 6; i++) { const f = TX.shopfront(i * 2 + 1); const m = surfaceShader(new THREE.MeshStandardMaterial({ map: f.map, emissiveMap: f.emissiveMap, emissive: 0xffffff, emissiveIntensity: 0, roughnessMap: f.rm, metalnessMap: f.rm, normalMap: f.normalMap, normalScale: new THREE.Vector2(0.8, -0.8), roughness: 1, metalness: 1 }), 'facade', nt); this.shops.push({ mat: m, gb: new GB() }); this.facadeMats.push(m); }
     this.gb = { side: new GB(), top: new GB(), grass: new GB(), curb: new GB(), roof: new GB(), props: new GB(), metal: new GB(), asphalt: new GB(), chevron: new GB(), sand: new GB() };
   }
 
@@ -413,13 +471,25 @@ export class World {
         for (let o = -7.2; o <= 7.2; o += 1.25) { const [cx, cz] = at(s + side * 2.4, o); add(quads, cx, cz, yaw, 0.62, 3.0); }
       }
     }
-    const make = (arr, mat) => {
+    // polished wheel paths + oil drips down the middle of every lane (one decal per lane per block)
+    const wear = [];
+    for (let l = 0; l <= NB; l++) for (let k = 0; k < NB; k++) for (const axis of ['x', 'z']) {
+      const [ax, az] = axis === 'x' ? this.nodePos(k, l) : this.nodePos(l, k); const dx = axis === 'x' ? 1 : 0, dz = 1 - dx, yaw = axis === 'x' ? Math.PI / 2 : 0;
+      const [kA, lA] = axis === 'x' ? [k, l] : [l, k], [kB, lB] = axis === 'x' ? [k + 1, l] : [l, k + 1];
+      const s0 = this.stopDist(kA, lA) - 1, s1 = P - this.stopDist(kB, lB) + 1, mid = (s0 + s1) / 2;
+      for (const off of [-5.6, -1.98, 1.98, 5.6]) add(wear, ax + dx * mid - dz * off, az + dz * mid + dx * off, yaw, 3.4, s1 - s0);
+    }
+    for (const D of this.diags) for (let i = 0; i + 1 < D.nodes.length; i++) {
+      const [ax, az] = this.nodePos(...D.nodes[i]), [bx, bz] = this.nodePos(...D.nodes[i + 1]); const L = Math.hypot(bx - ax, bz - az); const dx = (bx - ax) / L, dz = (bz - az) / L;
+      for (const off of [-5.6, -1.98, 1.98, 5.6]) add(wear, ax + dx * L / 2 - dz * off, az + dz * L / 2 + dx * off, Math.atan2(dx, dz), 3.4, L - 44);
+    }
+    const make = (arr, mat, y = 0.012) => {
       const g = new THREE.PlaneGeometry(1, 1); g.rotateX(-Math.PI / 2);
       const im = new THREE.InstancedMesh(g, mat, arr.length); const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), s = new THREE.Vector3(), p = new THREE.Vector3();
-      arr.forEach(([x, z, yaw, w, l], i) => { q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw); p.set(x, 0.012, z); s.set(w, 1, l); m4.compose(p, q, s); im.setMatrixAt(i, m4); });
+      arr.forEach(([x, z, yaw, w, l], i) => { q.setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw); p.set(x, y, z); s.set(w, 1, l); m4.compose(p, q, s); im.setMatrixAt(i, m4); });
       im.receiveShadow = true; im.frustumCulled = false; this.root.add(im);
     };
-    make(quads, this.mat.line); make(yq, this.mat.yline);
+    make(wear, this.mat.wear, 0.006); make(quads, this.mat.line); make(yq, this.mat.yline);
   }
 
   setupDiagonals() {
@@ -970,7 +1040,7 @@ export class World {
     add(this.gb.props, this.mat.props, true, true);
     add(this.gb.metal, this.mat.metal, true, true);
     if (this.storeGB) { add(this.storeGB.peg, this.storeMat.peg, false, true); add(this.storeGB.floor, this.storeMat.floor, false, true); add(this.storeGB.ceil, this.storeMat.ceil, false, false); }
-    const asp = this.mat.asphalt.clone(); asp.map = this.asphaltTex.map.clone(); asp.map.repeat.set(1, 1); asp.normalMap = this.asphaltTex.normalMap.clone(); asp.normalMap.repeat.set(1, 1); asp.roughnessMap = null; asp.roughness = 0.88; asp.color.setScalar(0.9);
+    const asp = this.mat.asphalt.clone(); asp.map = this.asphaltTex.map.clone(); asp.map.repeat.set(1, 1); asp.normalMap = this.asphaltTex.normalMap.clone(); asp.normalMap.repeat.set(1, 1); asp.roughnessMap = null; asp.roughness = 0.88; asp.color.setScalar(0.9); surfaceShader(asp, 'asphalt', this.noiseTex);
     asp.map.needsUpdate = true; asp.normalMap.needsUpdate = true;
     asp.polygonOffset = true; asp.polygonOffsetFactor = -1; asp.polygonOffsetUnits = -1;
     add(this.gb.asphalt, asp, false, true);

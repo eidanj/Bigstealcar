@@ -1,11 +1,13 @@
 // Big Steal Car — procedural car models (extruded side profiles, clear-coat paint, liveries) and instanced wheels.
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeGeometries, toCreasedNormals } from 'three/addons/utils/BufferGeometryUtils.js';
 import { CAR_TYPES } from './config.js';
 import * as TX from './textures.js';
 
 const BT = 0.07, BS = 0.045; // extrude bevel thickness / size
+// which palette colours are metallic (the rest are solid gloss)
+const METALLIC = new Set([0xb8bcc2, 0x5d6168, 0x1d3a6e, 0x5e1320, 0x1f4d36, 0xc9b48f, 0x2a7f8f, 0x2b2f3a, 0x8a1538, 0x3c6e9e, 0x6b4e9b, 0x111214]);
 
 function profile(t) {
   const L = t.L, p = t.prof, c = t.clear + BS, zF = L / 2 - BS, zR = -L / 2 + BS;
@@ -63,6 +65,9 @@ function extrudeSide(shape, width, t, taperFrom, taperAmt, curve = 10) {
     const z = pos.getZ(i), y = pos.getY(i), nx = nor.getX(i); const u = (z + t.L / 2) / t.L;
     uv.setXY(i, nx > 0 ? 1 - u : u, y / H);
   }
+  // ExtrudeGeometry shades every segment flat, which made curved hoods and roofs look striped like a plastic
+  // model; smooth across gentle bends (curves, bevels) and keep real body creases sharp
+  toCreasedNormals(g, THREE.MathUtils.degToRad(34));
   g.computeBoundingSphere();
   return g;
 }
@@ -70,15 +75,15 @@ function extrudeSide(shape, width, t, taperFrom, taperAmt, curve = 10) {
 export class CarFactory {
   constructor() {
     this.cache = {}; this.paint = new Map(); this.side = new Map();
-    this.glass = new THREE.MeshPhysicalMaterial({ color: 0x0c131b, metalness: 0.1, roughness: 0.06, transparent: true, opacity: 0.82, envMapIntensity: 1.3, clearcoat: 1, clearcoatRoughness: 0.08 });
+    this.glass = new THREE.MeshPhysicalMaterial({ color: 0x0a1016, metalness: 0.0, roughness: 0.02, transparent: true, opacity: 0.84, envMapIntensity: 1.4, clearcoat: 1, clearcoatRoughness: 0.02, specularIntensity: 1 });
     this.trim = new THREE.MeshStandardMaterial({ color: 0x0f1012, roughness: 0.62, metalness: 0.15 });
-    this.chrome = new THREE.MeshStandardMaterial({ color: 0xd8dadc, metalness: 1, roughness: 0.22 });
+    this.chrome = new THREE.MeshStandardMaterial({ color: 0xe2e4e6, metalness: 1, roughness: 0.12 });
     this.lamp = TX.carLights();
     this.grille = new THREE.MeshStandardMaterial({ map: this.lamp.map, roughness: 0.55, metalness: 0.4 });
     this.plateTex = TX.plate();
     this.plate = new THREE.MeshStandardMaterial({ map: this.plateTex, roughness: 0.5 });
     this.taxiSign = new THREE.MeshStandardMaterial({ map: TX.taxiSign(), emissiveMap: null, emissive: 0xffd60a, emissiveIntensity: 0.2, roughness: 0.4 });
-    this.night = 0;
+    this.night = 0; this.envMap = null; this.flake = TX.carFlake(); this.flake.repeat.set(3, 3); this.wearTex = {};
   }
   setNight(n) { this.taxiSign.emissiveIntensity = 0.2 + n * 1.2; this.night = n; }
   // every lamp on a car is one mesh; a float attribute picks which of 8 functions a face belongs to and a
@@ -95,20 +100,60 @@ export class CarFactory {
     m.customProgramCacheKey = () => 'bsc-lamp-v1';
     return m;
   }
+  // real reflections: car materials point straight at the city reflection probe (with their own intensity)
+  setEnvMap(tex) {
+    this.envMap = tex;
+    const all = [this.glass, this.chrome, this.trim, ...this.paint.values(), ...this.side.values()];
+    for (const m of all) { m.envMap = tex; m.needsUpdate = true; }
+  }
   paintMat(color) {
-    if (!this.paint.has(color)) this.paint.set(color, new THREE.MeshPhysicalMaterial({ color, metalness: 0.42, roughness: 0.4, clearcoat: 0.8, clearcoatRoughness: 0.22, envMapIntensity: 0.95 }));
+    if (!this.paint.has(color)) {
+      const metallic = METALLIC.has(color);
+      const m = new THREE.MeshPhysicalMaterial({ color, metalness: metallic ? 0.62 : 0.05, roughness: metallic ? 0.3 : 0.4, clearcoat: 1, clearcoatRoughness: 0.035, envMapIntensity: 0.72, envMap: this.envMap });
+      if (metallic) { m.normalMap = this.flake; m.normalScale = new THREE.Vector2(0.22, 0.22); } // flake glints under a smooth clear layer
+      this.paint.set(color, m);
+    }
     return this.paint.get(color);
   }
-  sideMat(t, color) {
-    const key = t.key + ':' + color;
+  // body sides: painted livery texture + panel gaps + (for older cars) a little rust, fade, scratches and grime
+  sideMat(t, color, wear = 0) {
+    const key = t.key + ':' + color + ':' + wear;
     if (!this.side.has(key)) {
       const tk = t.livery ? t.key : 'gen:' + t.key;
       if (!this.cache['side:' + tk]) this.cache['side:' + tk] = TX.carSide(t, t.livery);
-      const m = this.paintMat(t.livery ? 0xffffff : color).clone(); m.map = this.cache['side:' + tk];
+      const m = this.paintMat(t.livery ? 0xffffff : color).clone(); m.map = this.cache['side:' + tk]; m.envMap = this.envMap;
       if (!this.cache['panel:' + t.key]) this.cache['panel:' + t.key] = TX.carPanels(t);
-      m.normalMap = this.cache['panel:' + t.key]; m.normalScale = new THREE.Vector2(0.7, 0.7); this.side.set(key, m);
+      m.normalMap = this.cache['panel:' + t.key]; m.normalScale = new THREE.Vector2(0.4, 0.4);
+      if (!this.wearTex[t.key]) this.wearTex[t.key] = TX.carWear(t);
+      const uW = { value: [0, 0.38, 0.72][wear] || 0 }, wearMap = { value: this.wearTex[t.key] };
+      m.onBeforeCompile = (sh) => {
+        sh.uniforms.uWear = uW; sh.uniforms.wearMap = wearMap;
+        sh.fragmentShader = sh.fragmentShader
+          .replace('#include <common>', '#include <common>\nuniform sampler2D wearMap; uniform float uWear;')
+          .replace('#include <map_fragment>', `#include <map_fragment>
+            vec3 wr = texture2D( wearMap, vMapUv ).rgb;
+            float thr = 1.0 - uWear * 0.6, on = step( 0.01, uWear );
+            float rust = smoothstep( thr, thr + 0.035, wr.r ) * on;            // bare rusted metal
+            float lift = ( smoothstep( thr - 0.09, thr, wr.r ) - rust ) * on;  // bubbled paint around it
+            float fade = wr.g * uWear, grime = wr.b * uWear;
+            diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * 0.8 + vec3( 0.06 ), fade * 0.85 );
+            diffuseColor.rgb *= 1.0 - lift * 0.16 - grime * 0.3;
+            vec3 rc = mix( vec3( 0.075, 0.03, 0.016 ), vec3( 0.2, 0.075, 0.03 ), smoothstep( thr, thr + 0.2, wr.r ) );
+            diffuseColor.rgb = mix( diffuseColor.rgb, rc, rust );`)
+          .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n roughnessFactor = mix( roughnessFactor, 0.92, max( rust, lift * 0.5 + fade * 0.35 + grime * 0.5 ) );')
+          .replace('#include <metalnessmap_fragment>', '#include <metalnessmap_fragment>\n metalnessFactor *= 1.0 - rust;')
+          .replace('#include <lights_physical_fragment>', '#include <lights_physical_fragment>\n material.clearcoat *= 1.0 - clamp( rust + lift * 0.6 + grime * 0.6, 0.0, 1.0 ); material.clearcoatRoughness = mix( material.clearcoatRoughness, 0.3, clamp( fade * 1.5, 0.0, 1.0 ) );');
+      };
+      m.customProgramCacheKey = () => 'bsc-carside-v2';
+      this.side.set(key, m);
     }
     return this.side.get(key);
+  }
+  // how worn a new car is: sports/super cars and cruisers are always clean; older everyday models sometimes aren't
+  rollWear(t) {
+    if (['Sports', 'Super', 'Police'].includes(t.cls)) return 0;
+    const r = Math.random(); const old = t.cls === 'Muscle' || t.cls === 'Van' || t.cls === 'Compact' || t.cls === 'Taxi';
+    return old ? (r < 0.55 ? 0 : r < 0.86 ? 1 : 2) : (r < 0.86 ? 0 : r < 0.97 ? 1 : 2);
   }
   parts(t) {
     if (this.cache[t.key]) return this.cache[t.key];
@@ -178,11 +223,11 @@ export class CarFactory {
   }
 
   // returns { group, body, cabin, lamps (8 emissive colours), barR, barB, deform() }
-  build(typeKey, color) {
+  build(typeKey, color, wear) {
     const t = CAR_TYPES[typeKey]; const P = this.parts(t);
-    const col = t.fixedColor ?? color;
+    const col = t.fixedColor ?? color; wear = wear ?? this.rollWear(t);
     const g = new THREE.Group(); const model = new THREE.Group(); g.add(model);
-    const body = new THREE.Mesh(P.body.clone(), [this.sideMat(t, col), this.paintMat(col)]);
+    const body = new THREE.Mesh(P.body.clone(), [this.sideMat(t, col, wear), this.paintMat(col)]);
     const cabin = new THREE.Mesh(P.cabin.clone(), this.glass);
     model.add(body, cabin);
     const roofCol = t.livery === 'police' ? 0xf2f2f2 : col;
@@ -215,7 +260,7 @@ export class CarFactory {
     };
     const repair = () => { body.geometry.attributes.position.array.set(orig.body); body.geometry.attributes.position.needsUpdate = true; cabin.geometry.attributes.position.array.set(orig.cabin); cabin.geometry.attributes.position.needsUpdate = true; };
     const repaint = (c) => { body.material = [this.sideMat(t, c), this.paintMat(c)]; model.children.forEach((m) => { if (m.geometry === P.paint) m.material = this.paintMat(t.livery === 'police' ? 0xf2f2f2 : c); }); };
-    return { group: g, model, body, cabin, lamps: lampMat.userData.uL.value, lampMat, barR, barB, deform, repair, repaint, color: col };
+    return { group: g, model, body, cabin, lamps: lampMat.userData.uL.value, lampMat, barR, barB, deform, repair, repaint, color: col, wear };
   }
 }
 // textured lamp quads with a per-vertex function id (lfn) for the lamp shader
@@ -250,7 +295,7 @@ export class Wheels {
     const prof = [[0.6, -0.5], [0.86, -0.5], [0.95, -0.46], [1.0, -0.34], [1.0, 0.34], [0.95, 0.46], [0.86, 0.5], [0.6, 0.5]].map(([r, y]) => new THREE.Vector2(r, y));
     const tire = new THREE.LatheGeometry(prof, 28).rotateZ(Math.PI / 2);
     // tread grooves via vertex darkening isn't possible on lathe; use a slight bumpy normal from a dark texture instead
-    this.tire = new THREE.InstancedMesh(tire, new THREE.MeshStandardMaterial({ color: 0x141414, roughness: 0.92 }), max);
+    const tt = TX.tire(); tt.map.repeat.set(1, 1); this.tire = new THREE.InstancedMesh(tire, new THREE.MeshStandardMaterial({ map: tt.map, normalMap: tt.normalMap, normalScale: new THREE.Vector2(1.2, 1.2), color: 0xffffff, roughness: 0.88 }), max);
     const parts = [];
     const add = (g, hex) => { const n = g.index ? g.toNonIndexed() : g; const c = new THREE.Color(hex); const a = new Float32Array(n.attributes.position.count * 3); for (let i = 0; i < a.length; i += 3) { a[i] = c.r; a[i + 1] = c.g; a[i + 2] = c.b; } n.setAttribute('color', new THREE.BufferAttribute(a, 3)); n.deleteAttribute('uv'); parts.push(n); };
     add(new THREE.CylinderGeometry(0.62, 0.62, 0.8, 24, 1, true).rotateZ(Math.PI / 2), 0x9a9da3);
@@ -259,7 +304,7 @@ export class Wheels {
     for (let k = 0; k < 5; k++) { const a = (k / 5) * Math.PI * 2; add(new THREE.BoxGeometry(0.08, 0.5, 0.13).translate(0, 0.32, 0).rotateX(a).translate(0.4, 0, 0), 0xd5d8dc); }
     add(new THREE.TorusGeometry(0.6, 0.035, 6, 24).rotateY(Math.PI / 2).translate(0.4, 0, 0), 0xe0e3e6);
     add(new THREE.CylinderGeometry(0.12, 0.12, 0.08, 12).rotateZ(Math.PI / 2).translate(0.42, 0, 0), 0xc9ccd0);
-    this.rim = new THREE.InstancedMesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.9, roughness: 0.25 }), max);
+    this.rim = new THREE.InstancedMesh(mergeGeometries(parts), new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.95, roughness: 0.18 }), max);
     for (const im of [this.tire, this.rim]) { im.castShadow = true; im.frustumCulled = false; im.count = 0; scene.add(im); }
     this.free = []; for (let i = max - 1; i >= 0; i--) this.free.push(i); this.used = 0;
     const z = new THREE.Matrix4().makeScale(0, 0, 0); for (let i = 0; i < max; i++) { this.tire.setMatrixAt(i, z); this.rim.setMatrixAt(i, z); this.rim.setColorAt(i, new THREE.Color(1, 1, 1)); }

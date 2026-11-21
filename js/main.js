@@ -65,6 +65,11 @@ class Game {
     await this.world.build(progress);
     progress(0.84, 'Polishing the paint');
     this.carFactory = new CarFactory(); this.wheels = new Wheels(this.scene); this.humans = new HumanRenderer(this.scene, 96); this.effects = new Effects(this.scene, this.world);
+    // the reflection probe sees the static world (layer 2): buildings, streets, trees, lamps, sky, sea, clouds and the lights
+    this.env.camPos = this.camera.position;
+    const L2 = (o) => o.traverse((q) => q.layers.enable(2)); L2(this.world.root); L2(this.props.root);
+    for (const o of [this.env.sky, this.env.sea, this.env.clouds, this.env.stars, this.env.moon, this.env.sun, this.env.hemi]) o.layers.enable(2);
+    this.env.onProbe = (tex) => this.carFactory.setEnvMap(tex); if (this.env.probeReady) this.carFactory.setEnvMap(this.env.probeRT.texture);
     this.audio = new AudioEngine(); this.input = new Input(this.renderer.domElement);
     this.hud = new HUD(this); this.hud.buildMap();
     this.peds = new Peds(this); this.population = new Population(this);
@@ -523,7 +528,7 @@ class Game {
       this.grade.uniforms.uDesat.value = damp(this.grade.uniforms.uDesat.value, busted ? 0.85 : 0, 3, dt);
       this.grade.uniforms.uTint.value.set(this.cinematic === 'ko' ? 1.15 : 0.85, this.cinematic === 'ko' ? 0.8 : 0.95, this.cinematic === 'ko' ? 0.8 : 1.15);
       this.grade.uniforms.uVig.value = this.state === 'menu' ? 1.3 : 0.9;
-      if (this.state !== 'loading') this.composer.render();
+      if (this.state !== 'loading') { if (this.state !== 'paused' && this.state !== 'shop') this.env.probeStep(this.focus); this.composer.render(); } // one reflection-probe face per rendered frame
       this.saveT += dt; if (this.saveT > 15 && this.state === 'play') { this.saveT = 0; this.saveGame(); }
     } catch (e) { console.error(e); if (!this.errShown) { this.errShown = true; console.warn('frame error', e); } }
     this.input.endFrame();

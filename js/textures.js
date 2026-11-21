@@ -5,7 +5,7 @@ import { rng } from './util.js';
 let ANISO = 8;
 export function setAnisotropy(a) { ANISO = a; }
 
-function cv(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d')]; }
+function cv(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return [c, c.getContext('2d', { willReadFrequently: true })]; }
 function tex(c, { repeat = true, color = true } = {}) {
   const t = new THREE.CanvasTexture(c);
   if (repeat) t.wrapS = t.wrapT = THREE.RepeatWrapping;
@@ -54,26 +54,66 @@ export function asphalt() {
     const rough = 200 + (fine - 0.5) * 40 - big * 50; rd[k] = 0; rd[k + 1] = rough; rd[k + 2] = 0; rd[k + 3] = 255;
   }
   x.putImageData(img, 0, 0); rx.putImageData(rimg, 0, 0);
-  // tar seams + cracks
-  x.strokeStyle = 'rgba(15,15,17,0.55)'; x.lineWidth = 2;
-  for (let k = 0; k < 7; k++) { x.beginPath(); let px = r() * N, py = r() * N; x.moveTo(px, py); for (let s = 0; s < 9; s++) { px += (r() - 0.5) * 60; py += (r() - 0.5) * 60; x.lineTo(px, py); } x.stroke(); }
-  x.fillStyle = 'rgba(20,20,22,0.18)'; for (let k = 0; k < 6; k++) { x.beginPath(); x.ellipse(r() * N, r() * N, 20 + r() * 50, 12 + r() * 30, r() * 3, 0, 7); x.fill(); }
+  // hairline cracks that branch, a few sealed "tar snakes" (darker and glossier) and old stains
+  const crack = (px, py, ang, len, w, depth) => {
+    for (let s2 = 0; s2 < len; s2++) {
+      const nx = px + Math.cos(ang) * 6, ny = py + Math.sin(ang) * 6; x.strokeStyle = `rgba(10,10,12,${0.36 - depth * 0.09})`; x.lineWidth = w;
+      x.beginPath(); x.moveTo(px, py); x.lineTo(nx, ny); x.stroke(); px = nx; py = ny; ang += (r() - 0.5) * 0.9;
+      if (depth < 2 && r() < 0.12) crack(px, py, ang + (r() < 0.5 ? 1 : -1) * (0.6 + r() * 0.6), 3 + r() * 8, Math.max(0.6, w * 0.7), depth + 1);
+    }
+  };
+  for (let k = 0; k < 9; k++) crack(r() * N, r() * N, r() * 6.3, 8 + r() * 22, 1.1, 0);
+  for (let k = 0; k < 3; k++) {
+    let px = r() * N, py = r() * N, ang = r() * 6.3; x.beginPath(); rx.beginPath(); x.moveTo(px, py); rx.moveTo(px, py);
+    for (let s2 = 0; s2 < 24; s2++) { px += Math.cos(ang) * 9; py += Math.sin(ang) * 9; ang += (r() - 0.5) * 0.7; x.lineTo(px, py); rx.lineTo(px, py); }
+    x.strokeStyle = 'rgba(12,12,14,0.6)'; x.lineWidth = 4 + r() * 3; x.lineJoin = 'round'; x.stroke(); rx.strokeStyle = 'rgb(0,95,0)'; rx.lineWidth = 6; rx.lineJoin = 'round'; rx.stroke();
+  }
+  x.fillStyle = 'rgba(18,18,20,0.14)'; for (let k = 0; k < 7; k++) { x.beginPath(); x.ellipse(r() * N, r() * N, 14 + r() * 40, 9 + r() * 24, r() * 3, 0, 7); x.fill(); }
   return { map: tex(c), normalMap: normalFromHeight(h, N, N, 1.6), roughnessMap: tex(rc, { color: false }) };
 }
 
-export function concrete(slabs = 2, tone = 150) {
-  const N = 512, nz = makeNoise(32, 21); const r = rng(22);
-  const [c, x] = cv(N, N); const img = x.createImageData(N, N); const d = img.data; const h = new Float32Array(N * N);
-  const step = N / slabs;
+export function laneWear() {
+  const W = 64, H = 1024; const [c, x] = cv(W, H); const img = x.createImageData(W, H); const d = img.data; const nz = makeNoise(64, 401), r = rng(402);
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const u = i / (W - 1), v = j / (H - 1), ends = Math.max(0, 1 - Math.min(v, 1 - v) / 0.09);
+    const n = fbm(nz, i / 3, j / 40, 3), streak = fbm(nz, i / 1.2 + 9, j / 90, 2);
+    const track = Math.max(0, 1 - Math.abs(Math.abs(u - 0.5) - 0.22) / 0.075); const tr = track * track * (3 - 2 * track);
+    const oil = Math.max(0, 1 - Math.abs(u - 0.5) / 0.09) * (0.35 + 0.65 * Math.min(1, Math.max(0, (n - 0.45) * 3))) * (0.45 + ends * 1.2);
+    const a = Math.min(1, tr * (0.26 + 0.16 * streak) + oil * 0.42 + ends * 0.08 * n);
+    const k = (j * W + i) * 4; d[k] = d[k + 1] = 14; d[k + 2] = 16; d[k + 3] = a * 255;
+  }
+  x.putImageData(img, 0, 0); const t = tex(c, { repeat: false }); return t;
+}
+
+// tileable world-space noise for breaking up repeating textures in shaders:
+// R: soft large blobs  G: medium blobs  B: fine  A: blotchy stains
+export function noiseTex() {
+  const N = 256; const [c, x] = cv(N, N); const img = x.createImageData(N, N); const d = img.data;
+  const a = makeNoise(4, 301), b = makeNoise(8, 302), f = makeNoise(32, 303), g = makeNoise(16, 304);
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    const n = fbm(nz, i / 16, j / 16, 4); let v = tone + (n - 0.5) * 34 + (r() - 0.5) * 14;
-    const jx = i % step, jy = j % step; const joint = jx < 3 || jy < 3;
-    if (joint) v -= 45;
-    const k = (j * N + i) * 4; d[k] = v; d[k + 1] = v * 0.99; d[k + 2] = v * 0.96; d[k + 3] = 255;
-    h[j * N + i] = joint ? 0 : 0.5 + n * 0.3;
+    const k = (j * N + i) * 4;
+    d[k] = fbm(a, i / 64, j / 64, 4) * 255; d[k + 1] = fbm(b, i / 32, j / 32, 4) * 255; d[k + 2] = fbm(f, i / 8, j / 8, 3) * 255;
+    d[k + 3] = Math.min(1, Math.max(0, (fbm(g, i / 16, j / 16, 4) - 0.52) * 4)) * 255;
+  }
+  x.putImageData(img, 0, 0); return tex(c, { color: false });
+}
+
+export function concrete(slabs = 2, tone = 150) {
+  const N = 512, nz = makeNoise(32, 21), nz2 = makeNoise(64, 23); const r = rng(22);
+  const [c, x] = cv(N, N); const img = x.createImageData(N, N); const d = img.data; const h = new Float32Array(N * N);
+  const step = N / slabs; const slabTone = []; for (let k = 0; k < slabs * slabs; k++) slabTone.push((r() - 0.5) * 14);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const n = fbm(nz, i / 16, j / 16, 4), broom = (fbm(nz2, i / 1.5, j / 14, 2) - 0.5) * 10;
+    const jx = i % step, jy = j % step, e = Math.min(jx, jy, step - jx, step - jy); const joint = e < 2.5;
+    let v = tone + (n - 0.5) * 30 + (r() - 0.5) * 12 + broom + slabTone[Math.floor(j / step) * slabs + Math.floor(i / step)];
+    if (joint) v -= 48; else if (e < 9) v -= (9 - e) * 1.6; // dirt collects along the joints
+    const k = (j * N + i) * 4; d[k] = v; d[k + 1] = v * 0.99; d[k + 2] = v * 0.955; d[k + 3] = 255;
+    h[j * N + i] = joint ? 0 : 0.5 + n * 0.25 + broom * 0.008 + (e < 4 ? -0.15 : 0);
   }
   x.putImageData(img, 0, 0);
-  x.fillStyle = 'rgba(60,55,50,0.10)'; for (let k = 0; k < 14; k++) { x.beginPath(); x.ellipse(r() * N, r() * N, 8 + r() * 40, 6 + r() * 26, r() * 3, 0, 7); x.fill(); }
+  x.fillStyle = 'rgba(60,55,50,0.09)'; for (let k = 0; k < 12; k++) { x.beginPath(); x.ellipse(r() * N, r() * N, 8 + r() * 40, 6 + r() * 26, r() * 3, 0, 7); x.fill(); }
+  for (let k = 0; k < 26; k++) { x.fillStyle = `rgba(${40 + r() * 30},${40 + r() * 30},${40 + r() * 30},${0.35 + r() * 0.3})`; x.beginPath(); x.ellipse(r() * N, r() * N, 1.5 + r() * 2.5, 1.2 + r() * 2, 0, 0, 7); x.fill(); } // gum
+  if (slabs > 1) { x.strokeStyle = 'rgba(30,30,30,0.5)'; x.lineWidth = 1; let px = step * 0.2, py = step * (1 + r() * 0.3); x.beginPath(); x.moveTo(px, py); for (let s2 = 0; s2 < 12; s2++) { px += 5 + r() * 6; py += (r() - 0.5) * 9; x.lineTo(px, py); } x.stroke(); }
   return { map: tex(c), normalMap: normalFromHeight(h, N, N, 2.2) };
 }
 
@@ -204,7 +244,26 @@ export function facade(style, seed = 1) {
     x.fillStyle = '#5a6168'; x.fillRect(0, 0, N, 10);
     tileW = 16; tileH = 16;
   }
-  return { map: tex(c), emissiveMap: tex(ec), rm: tex(mc, { color: false }), tileW, tileH };
+  streaks(x, m, r, N);
+  return { map: tex(c), emissiveMap: tex(ec), rm: tex(mc, { color: false }), normalMap: reliefFrom(x, m, N, N, 2.6), tileW, tileH };
+}
+// dirty rain streaks: water runs off sills and ledges (the lighter, rougher bits above glass) and stains the wall
+function streaks(x, m, r, N) {
+  const md = m.getImageData(0, 0, N, N).data; x.save();
+  for (let k = 0; k < 70; k++) {
+    const px = r() * N, py = r() * N; const i = Math.floor(px), j = Math.floor(py);
+    if (md[(j * N + i) * 4 + 1] < 140) continue; // only from wall, not glass
+    const len = 20 + r() * 90, w = 2 + r() * 7; const g = x.createLinearGradient(0, py, 0, py + len);
+    g.addColorStop(0, `rgba(30,28,26,${0.05 + r() * 0.08})`); g.addColorStop(1, 'rgba(30,28,26,0)'); x.fillStyle = g; x.fillRect(px - w / 2, py, w, len);
+  }
+  x.restore();
+}
+// height from the painted facade: glass sits back in its opening, frames/sills/lintels stand proud, mortar
+// joints are a little lower than bricks, so the sun picks out real depth instead of a flat painted wall
+function reliefFrom(x, m, W, H, strength) {
+  const cd = x.getImageData(0, 0, W, H).data, md = m.getImageData(0, 0, W, H).data, h = new Float32Array(W * H);
+  for (let k = 0; k < W * H; k++) { const glass = md[k * 4 + 1] < 60; const lum = (cd[k * 4] * 0.3 + cd[k * 4 + 1] * 0.59 + cd[k * 4 + 2] * 0.11) / 255; h[k] = glass ? 0.05 : 0.55 + (lum - 0.5) * 0.35; }
+  return normalFromHeight(h, W, H, strength);
 }
 
 // ground-floor shopfront band (one tile = 12 m x 4.5 m)
@@ -231,7 +290,7 @@ export function shopfront(seed) {
     x.fillStyle = '#8d9399'; x.fillRect(x0 - 3, 57, w + 6, 4); x.fillRect(x0 - 3, 176, w + 6, 4);
   }
   x.fillStyle = '#3b2f2a'; x.fillRect(250, 64, 50, 128); x.fillStyle = '#c8a24a'; x.fillRect(288, 124, 4, 14);
-  return { map: tex(c), emissiveMap: tex(ec), rm: tex(mc, { color: false }), tileW: 12, tileH: 4.5 };
+  return { map: tex(c), emissiveMap: tex(ec), rm: tex(mc, { color: false }), normalMap: reliefFrom(x, m, W, H, 2.0), tileW: 12, tileH: 4.5 };
 }
 
 // ---------- signs / billboards ----------
@@ -405,12 +464,70 @@ export function carLights() {
   return { map, glow, R };
 }
 
+// metallic flake: tiny random facets under the clearcoat so metallic paint sparkles instead of looking like plastic
+export function carFlake() {
+  const N = 256; const r = rng(77); const h = new Float32Array(N * N);
+  for (let i = 0; i < N * N; i++) h[i] = r() * r();
+  return normalFromHeight(h, N, N, 1.4);
+}
+// Wear map in the car-side UV space (u along the length, v up the side). R = rust, G = sun-faded paint and scratches,
+// B = road grime. The shader scales it by how worn a particular car is (most are clean; older ones get a little).
+export function carWear(type) {
+  // R: rust propensity (the shader rusts only the peaks, more of them on a more worn car), so rust starts as
+  //    tiny crisp-edged spots on the arch lips, the sills and the door bottoms and grows from there
+  // G: sun-faded clear coat and scratches   B: road grime toward the sills
+  const W = 512, H = 160; const [c, x] = cv(W, H); const r = rng(type.key.length * 31 + 5);
+  const nz = makeNoise(128, 61 + type.key.length), nz2 = makeNoise(128, 97);
+  const L = type.L, Ht = type.H, p = type.prof, ar = type.wheelR + 0.1;
+  const seeds = []; for (let k = 0; k < 3; k++) seeds.push([-L / 2 + 0.7 + r() * (L - 1.4), type.clear + 0.12 + r() * 0.1, 0.05 + r() * 0.05]);
+  const img = x.createImageData(W, H); const d = img.data;
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    const z = (i / W) * L - L / 2, y = (1 - j / H) * Ht; let pr = 0;
+    for (const za of [type.wb / 2, -type.wb / 2]) { const dz = z - za, dy = y - type.wheelR; if (dy > -0.06) pr = Math.max(pr, 1 - Math.abs(Math.hypot(dz, dy) - ar) / 0.075); }
+    if (y >= type.clear - 0.02) pr = Math.max(pr, 1 - (y - type.clear) / 0.11);
+    for (const [sz, sy, sr] of seeds) pr = Math.max(pr, 1 - Math.hypot(z - sz, (y - sy) * 1.6) / sr);
+    pr = Math.min(1, Math.max(0, pr));
+    const n = fbm(nz, i / 6, j / 6, 4), n2 = fbm(nz2, i / 2.2, j / 2.2, 2), patch = fbm(nz2, i / 22 + 17, j / 14, 3);
+    // patchy, not a ring: only some stretches of a lip or sill are affected
+    const rust = Math.min(1, Math.max(0, pr * (0.15 + 1.25 * patch * patch * 1.6) * (0.55 + 0.7 * n) + (n2 - 0.5) * 0.28));
+    const up = Math.min(1, Math.max(0, (y - (p.beltH - 0.45)) / 0.4)), fade = up * (0.45 + 0.55 * fbm(nz2, i / 40, j / 25, 3));
+    const grime = Math.min(1, Math.max(0, (p.beltH * 0.75 - y) / (p.beltH * 0.75 - type.clear))) ** 1.6 * (0.5 + n);
+    const k = (j * W + i) * 4; d[k] = rust * 255; d[k + 1] = fade * 150; d[k + 2] = Math.min(1, grime) * 200; d[k + 3] = 255;
+  }
+  x.putImageData(img, 0, 0);
+  // a few fine scratches (G)
+  x.globalCompositeOperation = 'lighter'; x.lineWidth = 0.8;
+  for (let k = 0; k < 7; k++) { const y0 = (1 - (type.clear + 0.25 + r() * (p.beltH - type.clear - 0.35)) / Ht) * H, x0 = r() * W, len = 25 + r() * 90;
+    x.strokeStyle = `rgba(0,${120 + r() * 100},0,0.8)`; x.beginPath(); x.moveTo(x0, y0); x.quadraticCurveTo(x0 + len / 2, y0 + (r() - 0.5) * 5, x0 + len, y0 + (r() - 0.5) * 7); x.stroke(); }
+  x.globalCompositeOperation = 'source-over';
+  return tex(c, { repeat: false, color: false });
+}
+// tyres: tread blocks across the face, raised lettering on the sidewall (lathe UVs: u round, v across)
+export function tire() {
+  const W = 1024, H = 128; const [c, x] = cv(W, H); const h = new Float32Array(W * H);
+  x.fillStyle = '#1b1b1c'; x.fillRect(0, 0, W, H);
+  const tv0 = H * 0.42, tv1 = H * 0.58;
+  x.fillStyle = '#232324'; x.fillRect(0, tv0, W, tv1 - tv0);
+  x.font = 'bold 13px Arial'; x.textBaseline = 'middle';
+  const [lc, lx] = cv(W, H); lx.fillStyle = '#000'; lx.fillRect(0, 0, W, H); lx.font = x.font; lx.textBaseline = 'middle'; lx.fillStyle = '#fff';
+  for (const vy of [H * 0.08, H * 0.92]) for (let u = 0; u < W; u += W / 3) { x.fillStyle = '#2c2c2e'; x.fillText('ALTEKZ  RADIAL  225/45 R18', u + 30, vy); lx.fillText('ALTEKZ  RADIAL  225/45 R18', u + 30, vy); }
+  const L = lx.getImageData(0, 0, W, H).data;
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) {
+    let v = L[(j * W + i) * 4] / 255 * 0.5;
+    if (j > tv0 && j < tv1) { const bx = i % 24, by = (j - tv0) / (tv1 - tv0); const groove = bx < 4 || Math.abs(by - 0.5) < 0.06 || (Math.abs(by - 0.2) < 0.05 && (i % 48) < 24) || (Math.abs(by - 0.8) < 0.05 && (i % 48) >= 24); v = groove ? 0 : 1; }
+    h[j * W + i] = v;
+  }
+  const img = x.getImageData(0, 0, W, H); const d = img.data; for (let k = 0; k < W * H; k++) if (h[k] === 0 && Math.floor(k / W) > tv0 && Math.floor(k / W) < tv1) { d[k * 4] = d[k * 4 + 1] = d[k * 4 + 2] = 12; }
+  x.putImageData(img, 0, 0);
+  const t = tex(c); const n = normalFromHeight(h, W, H, 2.5); return { map: t, normalMap: n };
+}
+
 // smooth body-panel normal map: door gaps, swage line and a little orange-peel so paint isn't a perfect mirror
 export function carPanels(type) {
   const W = 512, H = 160; const h = new Float32Array(W * H); const nz = makeNoise(64, 9);
   const L = type.L, Ht = type.H, p = type.prof;
   const U = (z) => ((z + L / 2) / L) * W, V = (y) => H - (y / Ht) * H;
-  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) h[j * W + i] = nz(i * 0.5, j * 0.5) * 0.08;
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) h[j * W + i] = nz(i * 0.5, j * 0.5) * 0.06;
   const line = (u0, v0, u1, v1, depth, wdt = 1.2) => {
     const n = Math.ceil(Math.hypot(u1 - u0, v1 - v0)) + 1;
     for (let k = 0; k <= n; k++) { const u = u0 + (u1 - u0) * k / n, v = v0 + (v1 - v0) * k / n;
