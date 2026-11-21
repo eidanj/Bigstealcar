@@ -8,32 +8,105 @@ const { P, HALF, SLAB, LOT, CURB } = CITY;
 const V3 = THREE.Vector3;
 
 // ======================= wanted level =======================
+// How likely a bystander is to bother calling it in, per crime type, and how long the call takes (s).
+const CARE = { copcar: 1, vandal: 0.35, theft: 0.5, carjack: 0.9, reckless: 0.3, hitped: 0.8, assault: 0.7, shots: 0.95, shootcar: 0.55, misc: 0.4 };
+const CALL = { copcar: [4, 7], vandal: [10, 17], theft: [8, 14], carjack: [6, 10], reckless: [9, 15], hitped: [5, 9], assault: [6, 10], shots: [4, 7], shootcar: [6, 10], misc: [8, 14] };
 export class Wanted {
-  constructor(game) { this.game = game; this.heat = 0; this.stars = 0; this.unseenT = 0; this.seen = false; this.maxStars = 0; this.spawnT = 0; this.officerT = 0; this.locked = false; }
-  level(h) { let s = 0; for (let i = 1; i <= 5; i++) if (h >= WANTED.thresholds[i]) s = i; return s; }
-  crime(amount, why) {
-    if (amount <= 0) return; const g = this.game; if (g.state !== 'play') return;
-    this.heat = Math.min(WANTED.thresholds[5] + 50, this.heat + amount); const s = this.level(this.heat);
-    if (s > this.stars) { this.stars = s; this.maxStars = Math.max(this.maxStars, s); this.unseenT = -7; /* grace period while units respond */ g.hud.starsUp(); g.audio.starUp(); if (why) g.hud.help(why, 2.5); }
+  constructor(game) {
+    this.game = game; this.heat = 0; this.stars = 0; this.unseenT = 0; this.seen = false; this.maxStars = 0; this.spawnT = 0; this.officerT = 0; this.locked = false;
+    this.reports = []; this.lastKnown = { x: 0, z: 0, vx: 0, vz: 0, lx: 1, lz: 0, stale: true }; this.dispatchT = 0; this.sinceSeen = 99; this.quietT = 0;
   }
-  set(stars) { this.stars = stars; this.heat = WANTED.thresholds[stars] + 1; this.maxStars = Math.max(this.maxStars, stars); this.unseenT = -7; this.game.hud.starsUp(); }
-  clear(silent) { const had = this.stars; this.stars = 0; this.heat = 0; this.unseenT = 0; this.maxStars = 0; if (!silent && had) this.game.hud.help('Wanted level cleared.', 2.5); }
+  level(h) { let s = 0; for (let i = 1; i <= 5; i++) if (h >= WANTED.thresholds[i]) s = i; return s; }
+  // A crime: police who see it react at once; otherwise a civilian has to notice, care, and finish a phone call.
+  crime(amount, why, o = {}) {
+    if (amount <= 0) return; const g = this.game; if (g.state !== 'play') return;
+    const f = g.playerTarget(); const x = o.x ?? f.x, z = o.z ?? f.z;
+    if (o.direct || (this.stars > 0 && this.seen) || this.policeSee(x, z)) { this.addHeat(amount, why, true); return; }
+    // a call already in progress nearby just gets a longer story
+    const rep = this.reports.find((r) => Math.hypot(r.x - x, r.z - z) < 80);
+    if (rep) { rep.heat += amount; return; }
+    const type = o.type || 'misc'; const w = this.findWitness(x, z, o.victim, CARE[type] ?? 0.4);
+    if (!w) return;
+    const [a, b] = CALL[type] || CALL.misc; const t = a + Math.random() * (b - a) - (amount >= 30 ? 2 : 0);
+    const r = { who: w, t, t0: t, heat: amount, why, x, z, type }; this.reports.push(r);
+    if (w.brain) { w.brain.mode = 'call'; w.brain.callT = t; w.panic = 0; w.brain.flee = null; }
+    if (!this.toldCall || g.t - this.toldCall > 20) { this.toldCall = g.t; g.hud.help(w.brain ? '~y~A witness is calling the cops!~w~ Stop them or get out of sight.' : '~y~That driver is phoning the cops.~w~ Get out of here.', 3); }
+  }
+  addHeat(amount, why, direct) {
+    const g = this.game; const was = this.stars;
+    this.heat = Math.min(WANTED.thresholds[5] + 50, this.heat + amount); const s = this.level(this.heat);
+    const f = g.playerTarget(); this.markSeen(f);
+    if (s > this.stars) {
+      this.stars = s; this.maxStars = Math.max(this.maxStars, s); g.hud.starsUp(); g.audio.starUp(); if (why) g.hud.help(why, 2.8);
+      if (was === 0) {
+        this.unseenT = -4;
+        // a patrol right here is already on it; otherwise units have to be sent from across town
+        this.dispatchT = direct && this.nearestCop(f.x, f.z) < 90 ? 0 : s >= 3 ? 3 + Math.random() * 2 : 7 + Math.random() * 6;
+        if (!direct) this.sinceSeen = 99;
+      }
+    }
+  }
+  markSeen(f) { const k = this.lastKnown; k.x = f.x; k.z = f.z; k.vx = f.vx; k.vz = f.vz; k.lx = f.lx; k.lz = f.lz; k.stale = false; }
+  set(stars) { this.stars = stars; this.heat = WANTED.thresholds[stars] + 1; this.maxStars = Math.max(this.maxStars, stars); this.unseenT = -7; this.dispatchT = 0; this.markSeen(this.game.playerTarget()); this.game.hud.starsUp(); }
+  clear(silent) { const had = this.stars; this.stars = 0; this.heat = 0; this.unseenT = 0; this.maxStars = 0; this.dispatchT = 0; this.reports.length = 0; if (!silent && had) this.game.hud.help('Wanted level cleared.', 2.5); }
+  nearestCop(x, z) { let d = 1e9; for (const c of this.game.cars) if (c.role === 'police' && !c.dead) d = Math.min(d, Math.hypot(c.pos.x - x, c.pos.z - z)); return d; }
+  policeSee(x, z) {
+    const g = this.game, W = g.world;
+    for (const car of g.cars) {
+      if (car.role !== 'police' || car.dead || !car.driver) continue; const d = Math.hypot(car.pos.x - x, car.pos.z - z);
+      if (d < 22 || (d < 70 && W.raycast(car.pos.x, 1.3, car.pos.z, x, 1.3, z) >= 1)) return true;
+    }
+    for (const c of g.peds.cops) if (c.state === 'walk' && Math.hypot(c.pos.x - x, c.pos.z - z) < 40 && W.raycast(c.pos.x, 1.5, c.pos.z, x, 1.3, z) >= 1) return true;
+    return false;
+  }
+  // the victim first (they nearly always call), then whoever is closest and can actually see it
+  findWitness(x, z, victim, care) {
+    const g = this.game, W = g.world;
+    if (victim && victim.brain && victim.state === 'walk' && Math.random() < Math.max(care, 0.85)) return victim;
+    if (victim && victim.wheels && victim.driver === 'ai' && victim.role === 'traffic' && !victim.dead && Math.random() < Math.min(1, care * 1.6)) return victim;
+    const near = [];
+    for (const h of g.peds.list) { if (h === victim || h.state !== 'walk' || h.naughty || h.brain.mode === 'call') continue; const d = Math.hypot(h.pos.x - x, h.pos.z - z); if (d < 45) near.push([d, h]); }
+    near.sort((a, b) => a[0] - b[0]);
+    for (const [, h] of near.slice(0, 6)) { if (W.raycast(h.pos.x, 1.6, h.pos.z, x, 1.2, z) < 1) continue; if (Math.random() < care) return h; }
+    for (const c of g.cars) { if (c.role !== 'traffic' || !c.driver || c.driver === 'player' || c === victim) continue; if (Math.hypot(c.pos.x - x, c.pos.z - z) < 28 && Math.random() < care * 0.55) return c; }
+    return null;
+  }
+  // where the cops think you are: live position while they can see you, otherwise the last sighting
+  copTarget() { if (this.seen || this.sinceSeen < 1.5) return this.game.playerTarget(); return this.lastKnown; }
   update(dt) {
     const g = this.game; const f = g.playerTarget();
+    // calls in progress: knock the caller out and the call never goes through
+    for (let i = this.reports.length - 1; i >= 0; i--) {
+      const r = this.reports[i]; const ch = r.who.brain ? r.who : null;
+      if (ch && (ch.state !== 'walk' && ch.state !== 'seat') && g.peds.list.includes(ch)) { this.reports.splice(i, 1); if (ch.brain) ch.brain.mode = 'return'; g.hud.help('~g~The witness never finished that call.', 2.5); continue; }
+      if (!ch && (r.who.dead || !g.cars.includes(r.who))) { this.reports.splice(i, 1); continue; }
+      r.t -= dt;
+      if (r.t <= 0) {
+        this.reports.splice(i, 1); if (ch && ch.brain) { ch.brain.mode = 'return'; ch.panic = 0; }
+        const before = this.stars; this.addHeat(r.heat, null, false);
+        // the caller describes where it happened, or where you are if you're still hanging around
+        if (Math.hypot(f.x - r.x, f.z - r.z) > 60) { const k = this.lastKnown; k.x = r.x; k.z = r.z; k.vx = k.vz = 0; }
+        if (this.stars > before) g.hud.help(before === 0 ? '~r~A witness reported you.~w~ Police are on the way.' : '~r~Another report came in.~w~ More units responding.', 3);
+      }
+    }
     if (this.stars === 0) { this.heat = Math.max(0, this.heat - dt * 2); this.seen = false; this.manageCops(dt); return; }
     // are the cops watching?
     let seen = false;
     for (const car of g.cars) {
-      if (car.role !== 'police' || car.dead) continue; const d = Math.hypot(car.pos.x - f.x, car.pos.z - f.z);
+      if (car.role !== 'police' || car.dead || !car.driver || (car.ai && car.ai.suspect)) continue; const d = Math.hypot(car.pos.x - f.x, car.pos.z - f.z);
       if (d < 28 || (d < 75 && g.world.raycast(car.pos.x, 1.3, car.pos.z, f.x, 1.3, f.z) >= 1)) { seen = true; break; }
     }
-    if (!seen) for (const c of g.peds.cops) if (Math.hypot(c.pos.x - f.x, c.pos.z - f.z) < 35) { seen = true; break; }
+    if (!seen) for (const c of g.peds.cops) if (c.state === 'walk' && Math.hypot(c.pos.x - f.x, c.pos.z - f.z) < 35) { seen = true; break; }
     this.seen = seen;
-    if (seen) this.unseenT = Math.min(this.unseenT, 0);
+    if (seen) { this.unseenT = Math.min(this.unseenT, 0); this.sinceSeen = 0; this.markSeen(f); }
     else {
-      // searching cruisers nearby slow the escape down
-      let near = false; for (const car of g.cars) if (car.role === 'police' && !car.dead && Math.hypot(car.pos.x - f.x, car.pos.z - f.z) < 120) { near = true; break; }
-      this.unseenT += dt * (near ? 0.45 : 1);
+      this.sinceSeen += dt;
+      if (this.sinceSeen < 1.5) this.markSeen(f); // they still have a rough idea for a moment
+      if (this.dispatchT > 0) this.dispatchT -= dt; // units still on their way: the clock doesn't run yet
+      else {
+        let near = false; for (const car of g.cars) if (car.role === 'police' && !car.dead && Math.hypot(car.pos.x - f.x, car.pos.z - f.z) < 120) { near = true; break; }
+        this.unseenT += dt * (near ? 0.45 : 1);
+      }
       if (this.unseenT > WANTED.loseTime[this.stars]) {
         this.stars--; this.heat = WANTED.thresholds[this.stars] + 0.5; this.unseenT = 0;
         if (this.stars === 0) { const bonus = 150 * this.maxStars; g.addCash(bonus, 'Lost the cops'); g.stats.escapes++; g.hud.help(`You lost the cops! +${fmtMoney(bonus)}`, 3); g.audio.chime(); this.maxStars = 0; g.missions.onLostCops(); }
@@ -41,14 +114,17 @@ export class Wanted {
     }
     this.manageCops(dt);
   }
+  get responding() { return this.stars > 0 && this.dispatchT > 0; }
   manageCops(dt) {
     const g = this.game; const want = WANTED.copsPerStar[this.stars];
-    const cops = g.cars.filter((c) => c.role === 'police' && !c.dead && c.ai && !c.ai.traffic);
+    const cops = g.cars.filter((c) => c.role === 'police' && !c.dead && c.ai && !c.ai.traffic && !c.ai.suspect);
     this.spawnT -= dt;
-    if (cops.length < want && this.spawnT <= 0) {
-      this.spawnT = this.stars >= 4 ? 1.6 : 3.2;
-      const sp = g.population.spawnPoint(95, 190, true) || g.population.spawnPoint(70, 220, false);
-      if (sp) g.spawnPolice(sp);
+    if (this.stars > 0 && this.dispatchT <= 0 && cops.length < want && this.spawnT <= 0) {
+      this.spawnT = this.stars >= 4 ? 1.8 : 3.6;
+      // units are dispatched toward the last sighting from a few blocks out
+      const k = this.lastKnown; const c = { x: k.x, z: k.z };
+      const sp = g.population.spawnPoint(this.stars >= 4 ? 110 : 150, 240, true, c) || g.population.spawnPoint(95, 260, false, c);
+      if (sp && Math.hypot(sp.x - g.focus.x, sp.z - g.focus.z) > 70) g.spawnPolice(sp);
     }
     // officers jump out when you're on foot nearby
     if (!g.playerCar && this.stars > 0) {
@@ -219,9 +295,9 @@ export class Pickups {
     };
     // cash around sidewalks, alleys, parks and the promenade
     for (let k = 0; k < 44; k++) {
-      const b = W.blocks[Math.floor(r() * W.blocks.length)]; const side = r.int(0, 3); const u = r.range(-LOT, LOT); const d = SLAB - 2.5;
-      const [x, z] = [[b.cx + u, b.cz - d], [b.cx + d, b.cz + u], [b.cx + u, b.cz + d], [b.cx - d, b.cz + u]][side];
-      if (W.insideBuilding(x, z, 0.5)) continue; add('cash', x, z, { value: r.int(4, 15) * 10 });
+      const ring = W.rings[Math.floor(r() * W.rings.length)]; const n = ring.pts.length; const i = r.int(0, n - 1); const a = ring.pts[i], b = ring.pts[(i + 1) % n]; const u = r.range(0.1, 0.9);
+      const x = a[0] + (b[0] - a[0]) * u, z = a[1] + (b[1] - a[1]) * u;
+      if (W.insideBuilding(x, z, 0.5) || !W.onSlab(x, z)) continue; add('cash', x, z, { value: r.int(4, 15) * 10 });
     }
     for (const a of W.alleys.slice(0, 12)) { if (r() < 0.6) add('cash', a.cx + (a.axis === 'x' ? r.range(-20, 20) : 0), a.cz + (a.axis === 'z' ? r.range(-20, 20) : 0), { value: r.int(10, 25) * 10 }); }
     // wanted-level reset stars hidden in alleys

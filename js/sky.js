@@ -31,8 +31,17 @@ export class Environment {
     this.cloudMat = new THREE.MeshBasicMaterial({ map: ct, transparent: true, depthWrite: false, opacity: 0.75, fog: true, side: THREE.DoubleSide });
     this.clouds = new THREE.Mesh(new THREE.PlaneGeometry(7000, 7000).rotateX(Math.PI / 2), this.cloudMat); this.clouds.position.y = 650; this.clouds.renderOrder = -1; scene.add(this.clouds);
     // sea
-    const wn = TX.waterNormal(); wn.repeat.set(220, 220); this.waterNormal = wn;
-    this.sea = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(-Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x1c4a5e, roughness: 0.06, metalness: 0.25, normalMap: wn, normalScale: new THREE.Vector2(0.55, 0.55) }));
+    const wn = TX.waterNormal(); wn.repeat.set(260, 260); this.waterNormal = wn;
+    const seaMat = new THREE.MeshStandardMaterial({ color: 0x1c4a5e, roughness: 0.16, metalness: 0.1, normalMap: wn, normalScale: new THREE.Vector2(0.32, 0.32), envMapIntensity: 0.85 });
+    // the sea gets rougher with distance (no sparkling aliasing far out) and its sun glints are capped, so the
+    // sun lays a soft glitter path on the water instead of a field of blinding white dots
+    seaMat.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <roughnessmap_fragment>', '#include <roughnessmap_fragment>\n  roughnessFactor = mix( roughnessFactor, 0.45, smoothstep( 30.0, 700.0, length( vViewPosition ) ) );')
+        .replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n  reflectedLight.directSpecular = min( reflectedLight.directSpecular, vec3( 1.1 ) );');
+    };
+    seaMat.customProgramCacheKey = () => 'bsc-sea';
+    this.sea = new THREE.Mesh(new THREE.PlaneGeometry(9000, 9000).rotateX(-Math.PI / 2), seaMat);
     this.sea.position.y = -1.0; this.sea.receiveShadow = true; scene.add(this.sea);
     this.applyQuality(settings.quality);
     this.setTimeMode(settings.time, true);

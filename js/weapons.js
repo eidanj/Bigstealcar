@@ -41,7 +41,7 @@ export class Weapons {
     this.cool = 0; this.reloadT = 0; this.bloom = 0; this.lastShot = -9; this.aiming = false; this.punchHit = true; this.hitT = 0;
     const sc = game.scene;
     this.models = {}; for (const k of ['bat', 'pistol', 'smg', 'shotgun', 'rifle']) { this.models[k] = weaponModel(k); sc.add(this.models[k]); }
-    this.copGuns = []; for (let i = 0; i < 10; i++) { const m = weaponModel('pistol'); sc.add(m); this.copGuns.push(m); }
+    this.copGuns = []; for (let i = 0; i < 14; i++) { const m = weaponModel('pistol'); sc.add(m); this.copGuns.push(m); }
     // tracers
     this.maxTr = 64; this.tr = Array.from({ length: this.maxTr }, () => ({ life: 0 })); this.trI = 0;
     const tg = new THREE.BufferGeometry(); this.trPos = new Float32Array(this.maxTr * 6); this.trCol = new Float32Array(this.maxTr * 6);
@@ -117,9 +117,10 @@ export class Weapons {
     const g = this.g; const ch = g.player.char; const show = !g.playerCar && ch.visible && ch.state === 'walk' && this.cur !== 'fists';
     for (const k in this.models) { const m = this.models[k]; m.visible = show && k === this.cur; if (m.visible) { m.matrix.multiplyMatrices(ch.handM, _off); m.matrixWorldNeedsUpdate = true; } }
     for (const m of this.copGuns) m.visible = false;
-    for (const c of g.peds.cops) if (c.gun && c.handM && c.state === 'walk' && c.visible) { c.gun.visible = true; c.gun.matrix.multiplyMatrices(c.handM, _off); c.gun.matrixWorldNeedsUpdate = true; }
+    for (const list of [g.peds.cops, g.peds.list]) for (const c of list) if (c.gun && c.handM && c.state === 'walk' && c.visible) { c.gun.visible = true; c.gun.matrix.multiplyMatrices(c.handM, _off); c.gun.matrixWorldNeedsUpdate = true; }
   }
-  takeCopGun() { return this.copGuns.find((m) => !this.g.peds.cops.some((c) => c.gun === m)) || null; }
+  takeGun() { const P2 = this.g.peds; return this.copGuns.find((m) => !P2.cops.some((c) => c.gun === m) && !P2.list.some((c) => c.gun === m)) || null; }
+  takeCopGun() { return this.takeGun(); }
   muzzlePos(ch = this.g.player.char, model = this.models[this.cur]) {
     if (!model || !ch.handM) return ch.pos.clone().add(new V3(0, 1.4, 0));
     return new V3(0, 0, model.userData.muzzle).applyMatrix4(_m.multiplyMatrices(ch.handM, _off));
@@ -144,11 +145,9 @@ export class Weapons {
     g.rig.pitch -= this.cur === 'shotgun' ? 0.03 : this.cur === 'rifle' ? 0.006 : 0.01; g.rig.shake(this.cur === 'shotgun' ? 0.12 : 0.03);
     this.flash(muzzle, this.cur === 'shotgun' ? 1.6 : 1); g.audio.gun(this.cur, muzzle);
     // witnesses + panic
-    const peds = g.peds.list; let witness = false;
-    for (const p of peds) { const dd = Math.hypot(p.pos.x - ch.pos.x, p.pos.z - ch.pos.z); if (dd < 45) { witness = true; if (p.state === 'walk') { p.panic = 4 + Math.random() * 3; p.brain.flee = [p.pos.x - ch.pos.x, p.pos.z - ch.pos.z]; } } }
-    if (!witness) witness = g.cars.some((c) => c.role === 'police' && Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z) < 80);
+    g.wanted.crime(5, g.wanted.stars === 0 ? '~r~Shots fired!~w~ The cops heard that.' : null, { type: 'shots' });
+    for (const p of g.peds.list) { const dd = Math.hypot(p.pos.x - ch.pos.x, p.pos.z - ch.pos.z); if (dd < 45 && p.state === 'walk' && !p.naughty && p.brain.mode !== 'call') { p.panic = 4 + Math.random() * 3; p.brain.flee = [p.pos.x - ch.pos.x, p.pos.z - ch.pos.z]; } }
     for (const c of g.cars) if (c.ai && c.ai.cruise && Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z) < 35) c.ai.panicT = 9;
-    if (witness) g.wanted.crime(5, g.wanted.stars === 0 ? '~r~Shots fired!~w~ Somebody called the cops.' : null);
   }
   targets() { const g = this.g; const t = this._t || (this._t = []); t.length = 0; for (const p of g.peds.list) t.push(p); for (const c of g.peds.cops) t.push(c); return t; }
   raycast(o, d, tMin, tMax, ignore) {
@@ -195,7 +194,7 @@ export class Weapons {
     } else if (hit.kind === 'car') {
       hit.car.dent(p, d, dmg * 1.5); fx.sparksAt(p, 5, d.clone().negate(), 4, 0.9); if (Math.random() < 0.35) g.audio.ricochet(p); else g.audio.clank(p);
       if (hit.car.ai && hit.car.ai.cruise) hit.car.ai.panicT = 10; hit.car.wake();
-      if (byPlayer && hit.car.driver === 'ai') g.wanted.crime(hit.car.role === 'police' ? 8 : 2);
+      if (byPlayer && hit.car.driver === 'ai') g.wanted.crime(hit.car.role === 'police' ? 8 : 2, null, { direct: hit.car.role === 'police', type: 'shootcar', victim: hit.car, x: p.x, z: p.z });
     } else if (hit.kind === 'prop') {
       g.props.hit(hit.prop, d.x * 16, d.z * 16, 16, 500); fx.sparksAt(p, 3, null, 3, 0.7);
     } else {
@@ -207,12 +206,13 @@ export class Weapons {
     if (ch.health == null) ch.health = ch.cop ? 90 : 60;
     ch.health -= dmg; const cop = ch.cop;
     if (byPlayer && cop) ch.aggro = true;
+    if (byPlayer && ch.naughty) g.peds.provoked(ch, melee);
     if (ch.health <= 0) {
       ch.koT = 7.5; ch.knock(new V3(dir.x * (melee ? 4 : 3), 2.2, dir.z * (melee ? 4 : 3)), 0.8);
-      if (byPlayer) { g.stats.knocked++; g.wanted.crime(cop ? 40 : melee ? 10 : 20, cop ? 'You knocked out a ~b~cop~w~! Expect company.' : null); }
+      if (byPlayer) { g.stats.knocked++; g.wanted.crime(cop ? 40 : melee ? 10 : 20, cop ? 'You knocked out a ~b~cop~w~! Expect company.' : null, { direct: cop, type: 'assault', x: ch.pos.x, z: ch.pos.z }); }
     } else {
-      if (ch.state === 'walk') { ch.vel.x += dir.x * (melee ? 3 : 1.5); ch.vel.z += dir.z * (melee ? 3 : 1.5); if (!cop) { ch.panic = 4; if (ch.brain) ch.brain.flee = [dir.x, dir.z]; } }
-      if (byPlayer) g.wanted.crime(cop ? 25 : melee ? 6 : 12);
+      if (ch.state === 'walk') { ch.vel.x += dir.x * (melee ? 3 : 1.5); ch.vel.z += dir.z * (melee ? 3 : 1.5); if (!cop && !ch.naughty && ch.brain && ch.brain.mode !== 'surrender') { ch.panic = 4; ch.brain.flee = [dir.x, dir.z]; if (ch.brain.mode === 'call') ch.brain.mode = 'return'; } }
+      if (byPlayer && !ch.naughty) g.wanted.crime(cop ? 25 : melee ? 6 : 12, null, { direct: cop, type: 'assault', victim: ch, x: ch.pos.x, z: ch.pos.z });
     }
   }
 
@@ -256,6 +256,23 @@ export class Weapons {
       if (Math.hypot(end.x - tgt.x, end.z - tgt.z) < 6) g.audio.whiz();
     }
     this.tracer(from, end, true); this.flash(from, 0.8); g.audio.gun('pistol', from, 0.75);
+  }
+  // NPC-on-NPC fire: a troublemaker shooting a cruiser, an officer returning fire
+  npcShootAt(from, target, accuracy, dmg) {
+    const g = this.g; const isCar = !!target.wheels; const tgt = isCar ? target.pos.clone().add(new V3(0, 0.25, 0)) : target.pos.clone().add(new V3(0, 1.2, 0));
+    const d = tgt.clone().sub(from).normalize(); let end;
+    if (Math.random() < accuracy) {
+      end = tgt;
+      if (isCar) { target.dent(target.pos.clone().addScaledVector(d, -target.ex).add(new V3(0, 0.3, 0)), d, dmg * 2.2); g.effects.sparksAt(end.clone().addScaledVector(d, -target.ex * 0.8), 4, d.clone().negate(), 3, 0.8); g.audio.clank(end); target.wake && target.wake(); }
+      else { this.damageChar(target, dmg, d, false, false); g.audio.hitBody(end); }
+    } else {
+      d.x += (Math.random() - 0.5) * 0.14; d.y += (Math.random() - 0.5) * 0.06; d.z += (Math.random() - 0.5) * 0.14; d.normalize();
+      const h = this.raycast(from, d, 0.5, 70, null); end = h ? h.point : from.clone().addScaledVector(d, 70);
+      if (h && h.kind !== 'char') this.applyHit(h, d, 0, false);
+      const pp = g.playerTarget(); if (Math.hypot(end.x - pp.x, end.z - pp.z) < 5) g.audio.whiz();
+    }
+    this.tracer(from, end, true); this.flash(from, 0.8); g.audio.gun('pistol', from, 0.7);
+    for (const p of g.peds.list) if (p.state === 'walk' && !p.naughty && p.brain.mode !== 'call' && p.brain.mode !== 'surrender' && Math.hypot(p.pos.x - from.x, p.pos.z - from.z) < 35) { p.panic = 4; p.brain.flee = [p.pos.x - from.x, p.pos.z - from.z]; }
   }
   hurtPlayer(dmg, from) {
     const g = this.g; const car = g.playerCar;

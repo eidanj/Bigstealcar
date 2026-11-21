@@ -1,13 +1,14 @@
 // Big Steal Car — HUD: cash, wanted stars, minimap + full map, speedometer, help prompts, popups, big messages.
 import { CITY } from './config.js';
 import { $, clamp, fmtMoney } from './util.js';
+import { inset as insetPoly } from './world.js';
 
 const { HALF, RW, LIMIT, P, NB, SLAB } = CITY;
 const EXT = LIMIT + 30; // map extent (m)
 
 export function fmt(s) { // GTA-style colour codes: ~y~ yellow, ~g~ green, ~r~ red, ~b~ blue, ~w~ white; [F] key caps
   let out = '', open = false;
-  const parts = String(s).replace(/\[([A-Za-z0-9 ]{1,6})\]/g, '<kbd>$1</kbd>').split(/~([ygrbw])~/);
+  const parts = String(s).replace(/\[([A-Za-z0-9 ,./]{1,6})\]/g, '<kbd>$1</kbd>').split(/~([ygrbw])~/);
   for (let i = 0; i < parts.length; i++) {
     if (i % 2 === 0) out += parts[i];
     else { if (open) out += '</span>'; open = parts[i] !== 'w'; if (open) out += `<span class="c-${parts[i]}">`; }
@@ -56,20 +57,23 @@ export class HUD {
     x.fillStyle = '#c8b98f'; x.fillRect(X(-LIMIT - 58), X(-LIMIT - 40), (58 - 2) * k, (LIMIT * 2 + 80) * k); // beach
     x.fillStyle = '#7d7a72'; x.fillRect(X(-LIMIT), X(-LIMIT), LIMIT * 2 * k, LIMIT * 2 * k);
     x.fillStyle = '#9da2a8'; const e = HALF + RW / 2; x.fillRect(X(-e), X(-e), e * 2 * k, e * 2 * k);
+    const path = (pts) => { x.beginPath(); pts.forEach(([a, b], i) => (i ? x.lineTo(X(a), X(b)) : x.moveTo(X(a), X(b)))); x.closePath(); };
     for (const b of W.blocks) {
       const col = b.kind === 'park' ? '#4f7d4a' : b.kind === 'stunt' ? '#6b5d4a' : b.kind === 'parking' ? '#7c8085' : b.kind === 'plaza' ? '#8d8676' : '#5a5e64';
-      x.fillStyle = '#6f736f'; x.fillRect(X(b.cx - SLAB), X(b.cz - SLAB), SLAB * 2 * k, SLAB * 2 * k);
-      x.fillStyle = col; const L = SLAB - CITY.SW; x.fillRect(X(b.cx - L), X(b.cz - L), L * 2 * k, L * 2 * k);
+      for (const pc of b.pieces) { x.fillStyle = '#6f736f'; path(pc); x.fill(); x.fillStyle = col; path(insetPoly(pc, CITY.SW)); x.fill(); }
     }
     x.fillStyle = '#9da2a8'; for (const a of W.alleys) x.fillRect(X(a.x0), X(a.z0), (a.x1 - a.x0) * k, (a.z1 - a.z0) * k);
     for (const bd of W.buildings) {
-      const t = clamp(bd.h / 200, 0, 1); x.fillStyle = `rgb(${62 - t * 20},${66 - t * 20},${74 - t * 18})`; x.fillRect(X(bd.x0), X(bd.z0), (bd.x1 - bd.x0) * k, (bd.z1 - bd.z0) * k);
+      const t = clamp(bd.h / 200, 0, 1); x.fillStyle = `rgb(${62 - t * 20},${66 - t * 20},${74 - t * 18})`;
+      if (bd.poly) { x.save(); x.translate(1.2, 1.2); x.fillStyle = 'rgba(0,0,0,0.25)'; path(bd.poly); x.fill(); x.restore(); x.fillStyle = `rgb(${62 - t * 20},${66 - t * 20},${74 - t * 18})`; path(bd.poly); x.fill(); continue; }
+      x.fillRect(X(bd.x0), X(bd.z0), (bd.x1 - bd.x0) * k, (bd.z1 - bd.z0) * k);
       x.fillStyle = 'rgba(0,0,0,0.25)'; x.fillRect(X(bd.x0) + 1.5, X(bd.z1), (bd.x1 - bd.x0) * k, 1.5);
     }
     x.fillStyle = '#f2c14e'; for (const r of W.ramps) { x.save(); x.translate(X(r.x + Math.sin(r.yaw) * r.l / 2), X(r.z + Math.cos(r.yaw) * r.l / 2)); x.rotate(-r.yaw); x.fillRect(-r.w * k / 2, -r.l * k / 2, r.w * k, r.l * k); x.restore(); }
     // road centre lines
     x.strokeStyle = 'rgba(255,255,255,0.18)'; x.lineWidth = 1;
     for (let i = 0; i <= NB; i++) { const v = i * P - HALF; x.beginPath(); x.moveTo(X(-HALF), X(v)); x.lineTo(X(HALF), X(v)); x.stroke(); x.beginPath(); x.moveTo(X(v), X(-HALF)); x.lineTo(X(v), X(HALF)); x.stroke(); }
+    for (const D of W.diags) { const [ax, az] = W.nodePos(...D.nodes[0]), [bx, bz] = W.nodePos(...D.nodes[D.nodes.length - 1]); x.beginPath(); x.moveTo(X(ax), X(az)); x.lineTo(X(bx), X(bz)); x.stroke(); }
   }
 
   // ---------- per-frame ----------
@@ -80,7 +84,8 @@ export class HUD {
     this.cashEl.textContent = fmtMoney(this.shownCash);
     // stars
     const st = g.wanted.stars; this.flash += dt;
-    const blink = st > 0 && !g.wanted.seen && Math.floor(this.flash * 3) % 2 === 0;
+    // stars blink while the cops can't see you; fast blink while units are still being dispatched
+    const blink = st > 0 && !g.wanted.seen && Math.floor(this.flash * (g.wanted.responding ? 6 : 3)) % 2 === 0;
     this.starEls.forEach((s, i) => { s.classList.toggle('on', i < st && !blink); s.classList.toggle('dim', i < st && blink); });
     // timers
     if (this.helpT > 0) { this.helpT -= dt; if (this.helpT <= 0) this.helpEl.classList.add('hidden'); }
@@ -105,7 +110,7 @@ export class HUD {
     // area name on district change
     const area = g.world.district(g.focus.x, g.focus.z); if (area !== this.area) { this.area = area; this.areaEl.textContent = area; this.areaT = 4; }
     const mode = car ? 'car' : 'foot'; if (mode !== this.mode) { this.mode = mode; this.modeT = 7; const h = document.getElementById('modeHint');
-      h.innerHTML = car ? fmt('<b>DRIVING</b> [W][S] gas / brake · [A][D] steer · [Space] drift · [F] exit · [H] horn · [Q] radio · [V] camera · [M] map')
+      h.innerHTML = car ? fmt('<b>DRIVING</b> [W][S] gas / brake · [A][D] steer · [Space] drift · [F] exit · [H] horn · [,][.] signals · [/] hazards · [Q] radio · [V] camera · [M] map')
         : fmt('<b>ON FOOT</b> [W][A][S][D] move · [Shift] sprint · [Space] jump · [F] steal a car · [LMB] punch / shoot · [RMB] aim · [1]-[6] weapons · [M] map'); h.classList.remove('faded'); }
     if (this.modeT > 0) { this.modeT -= dt; if (this.modeT <= 0) document.getElementById('modeHint').classList.add('faded'); }
     this.drawMinimap(); if (car) this.drawSpeedo(car); this.spC.parentElement.classList.toggle('hidden', !car);
@@ -171,6 +176,9 @@ export class HUD {
     const ph = Math.floor(performance.now() / 180) % 2;
     for (const car2 of g.cars) if (car2.role === 'police' && car2.siren) blip(car2.pos.x, car2.pos.z, dot(ph ? '#ff2d55' : '#2d7dff', 4.5));
     for (const cop of g.peds.cops) blip(cop.pos.x, cop.pos.z, dot(ph ? '#2d7dff' : '#ff2d55', 3), false);
+    // witnesses on the phone to the cops, troublemakers who've turned hostile
+    for (const r of g.wanted.reports) if (r.who.brain) blip(r.who.pos.x, r.who.pos.z, (cx2) => { cx2.fillStyle = ph ? '#ffd60a' : '#fff'; cx2.strokeStyle = '#111'; cx2.lineWidth = 1.5; cx2.beginPath(); cx2.roundRect ? cx2.roundRect(-4, -6.5, 8, 13, 2) : cx2.rect(-4, -6.5, 8, 13); cx2.fill(); cx2.stroke(); cx2.fillStyle = '#111'; cx2.fillRect(-2.5, -4.5, 5, 7); });
+    for (const h of g.peds.list) if (h.naughty && ['fight', 'shootback', 'ambush'].includes(h.brain.mode)) blip(h.pos.x, h.pos.z, dot('#ff3b3b', 3.5), false);
     // player arrow
     const heading = car ? Math.atan2(car.fwd.x, car.fwd.z) : g.player.char.yaw; const a = -(heading - g.rig.yaw);
     x.save(); x.translate(cx, cy); x.scale(dpr, dpr); x.rotate(a);
@@ -217,6 +225,11 @@ export class HUD {
     x.fillStyle = '#fff'; x.font = `600 ${Math.round(s * 0.2)}px Oswald, Arial`; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText(String(Math.round(v)), cx, cy + R * 0.45);
     x.fillStyle = 'rgba(255,255,255,0.6)'; x.font = `${Math.round(s * 0.065)}px Oswald, Arial`; x.fillText(mph ? 'MPH' : 'KM/H', cx, cy + R * 0.7);
     x.fillStyle = car.vFwd < -0.5 ? '#ffd166' : '#4cc9f0'; x.font = `600 ${Math.round(s * 0.1)}px Oswald, Arial`; x.fillText(car.vFwd < -0.5 ? 'R' : String(car.gear + 1), cx, cy - R * 0.28);
+    // indicator tell-tales: green arrows that blink with the lamps, red triangle for hazards
+    const U = car.model.lamps; const onL = U[2].x > 0.1, onR = U[3].x > 0.1; const ay = cy - R * 0.55, aw = s * 0.07;
+    const arrow = (dir, on) => { const ax = cx + dir * R * 0.36; x.fillStyle = on ? '#3ee27a' : 'rgba(255,255,255,0.13)'; x.beginPath(); x.moveTo(ax + dir * aw, ay); x.lineTo(ax, ay - aw * 0.75); x.lineTo(ax, ay - aw * 0.32); x.lineTo(ax - dir * aw * 0.8, ay - aw * 0.32); x.lineTo(ax - dir * aw * 0.8, ay + aw * 0.32); x.lineTo(ax, ay + aw * 0.32); x.lineTo(ax, ay + aw * 0.75); x.closePath(); x.fill(); };
+    if (car.signal || car.hazard || onL || onR) { arrow(-1, onL); arrow(1, onR); }
+    if (car.hazard) { x.strokeStyle = onL ? '#ff4d4d' : 'rgba(255,77,77,0.35)'; x.lineWidth = s * 0.014; x.beginPath(); x.moveTo(cx, ay - aw * 0.7); x.lineTo(cx + aw * 0.7, ay + aw * 0.5); x.lineTo(cx - aw * 0.7, ay + aw * 0.5); x.closePath(); x.stroke(); }
   }
 
   // ---------- full map (pause menu) ----------

@@ -9,6 +9,44 @@ import * as TX from './textures.js';
 const { NB, P, RW, SW, CURB, HALF, SLAB, LOT, LIMIT, LANES } = CITY;
 const STOP = 14;            // stop line distance from a node centre
 const CELL = 16;            // collision grid cell size
+// Diagonal avenues cut corner-to-corner through a run of blocks, splitting each into two wedges.
+const DW = 16, DH = DW / 2, HH = DH * Math.SQRT2; // avenue width, half width, half width measured in (dx ± dz)
+export const DIAGS = [
+  { name: 'Grand Diagonal', from: [0, 4], dir: [1, 1], n: 5 },  // Sunset Heights -> Port Bellmont
+  { name: 'Spire Avenue', from: [9, 1], dir: [-1, 1], n: 4 },   // Rustwater -> Central Spire
+];
+
+// ---------- convex polygon helpers (XZ, positive orientation = counter-clockwise with x right, z up) ----------
+export function polyArea(p) { let a = 0; for (let i = 0; i < p.length; i++) { const [x1, z1] = p[i], [x2, z2] = p[(i + 1) % p.length]; a += x1 * z2 - x2 * z1; } return a / 2; }
+export function orient(p) { return polyArea(p) < 0 ? p.slice().reverse() : p; }
+export function inset(p, d) { // offset every edge inward by d (negative grows the polygon)
+  const n = p.length, L = [];
+  for (let i = 0; i < n; i++) { const [ax, az] = p[i], [bx, bz] = p[(i + 1) % n]; let ex = bx - ax, ez = bz - az; const l = Math.hypot(ex, ez) || 1; ex /= l; ez /= l; L.push([ax - ez * d, az + ex * d, ex, ez]); }
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const A = L[(i - 1 + n) % n], B = L[i]; const den = A[2] * B[3] - A[3] * B[2];
+    if (Math.abs(den) < 1e-9) { out.push([B[0], B[1]]); continue; }
+    const t = ((B[0] - A[0]) * B[3] - (B[1] - A[1]) * B[2]) / den; out.push([A[0] + A[2] * t, A[1] + A[3] * t]);
+  }
+  return out;
+}
+export function centroid(p) { let x = 0, z = 0; for (const [a, b] of p) { x += a; z += b; } return [x / p.length, z / p.length]; }
+function scalePoly(p, k) { const [cx, cz] = centroid(p); return p.map(([x, z]) => [cx + (x - cx) * k, cz + (z - cz) * k]); }
+function bbox(p) { let x0 = 1e9, x1 = -1e9, z0 = 1e9, z1 = -1e9; for (const [x, z] of p) { x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z); } return [x0, z0, x1, z1]; }
+export function inPoly(p, x, z, pad = 0) { // convex, positive orientation
+  for (let i = 0; i < p.length; i++) { const [ax, az] = p[i], [bx, bz] = p[(i + 1) % p.length]; const ex = bx - ax, ez = bz - az, l = Math.hypot(ex, ez) || 1; if (((x - ax) * ez - (z - az) * ex) / l > pad) return false; }
+  return true;
+}
+// blunt any corner sharper than ~50 degrees (flatiron noses)
+function bluntTips(p, cut) {
+  const out = []; const n = p.length;
+  for (let i = 0; i < n; i++) {
+    const a = p[(i - 1 + n) % n], b = p[i], c = p[(i + 1) % n]; const ux = a[0] - b[0], uz = a[1] - b[1], vx = c[0] - b[0], vz = c[1] - b[1]; const lu = Math.hypot(ux, uz), lv = Math.hypot(vx, vz);
+    const cos = (ux * vx + uz * vz) / (lu * lv || 1);
+    if (cos > 0.64 && lu > cut * 2 && lv > cut * 2) { out.push([b[0] + ux / lu * cut, b[1] + uz / lu * cut], [b[0] + vx / lv * cut, b[1] + vz / lv * cut]); } else out.push(b);
+  }
+  return out;
+}
 
 // ---------- geometry builder (positions, normals, uvs, colors) ----------
 class GB {
@@ -49,8 +87,37 @@ class GB {
     g.setIndex(this.i); g.computeBoundingSphere(); return g;
   }
   get empty() { return this.p.length === 0; }
+  tri(a, b, c, n, ua, ub, uc, col = [1, 1, 1]) {
+    const o = this.p.length / 3; this.p.push(...a, ...b, ...c); for (let k = 0; k < 3; k++) { this.n.push(...n); this.c.push(...col); }
+    this.u.push(...ua, ...ub, ...uc); this.i.push(o, o + 1, o + 2);
+  }
+  poly(pts, y, ts = 4, col) { // flat, facing up; pts convex in positive orientation
+    for (let i = 1; i < pts.length - 1; i++) { const a = pts[0], b = pts[i + 1], c = pts[i]; this.tri([a[0], y, a[1]], [b[0], y, b[1]], [c[0], y, c[1]], [0, 1, 0], [a[0] / ts, -a[1] / ts], [b[0] / ts, -b[1] / ts], [c[0] / ts, -c[1] / ts], col); }
+  }
+  // vertical wall over edge a->b (positive orientation => outward normal (ez, -ex)); flip faces it inward
+  wall(a, b, y0, y1, tw, th, col, vOff = 0, u0 = 0, flip = false) {
+    const ex = b[0] - a[0], ez = b[1] - a[1], l = Math.hypot(ex, ez) || 1; const v0 = vOff / th, v1 = (y1 - y0 + vOff) / th, u1 = u0 + l / tw;
+    if (!flip) this.quad([b[0], y0, b[1]], [a[0], y0, a[1]], [a[0], y1, a[1]], [b[0], y1, b[1]], [ez / l, 0, -ex / l], u0, u1, v0, v1, col);
+    else this.quad([a[0], y0, a[1]], [b[0], y0, b[1]], [b[0], y1, b[1]], [a[0], y1, a[1]], [-ez / l, 0, ex / l], u0, u1, v0, v1, col);
+  }
+  prism(pts, y0, y1, tw, th, col, vOff = 0) { // windows run continuously round the corners
+    let u = 0; for (let i = pts.length - 1; i >= 0; i--) { const a = pts[i], b = pts[(i + 1) % pts.length]; this.wall(a, b, y0, y1, tw, th, col, vOff, u); u += Math.hypot(b[0] - a[0], b[1] - a[1]) / tw; }
+  }
+  ring(pts, y0, y1, w, col) { // parapet / cap band around a polygon roof
+    const inn = inset(pts, w); const n = pts.length;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n], ia = inn[i], ib = inn[(i + 1) % n];
+      this.wall(a, b, y0, y1, 2, 2, col); this.wall(ia, ib, y0, y1, 2, 2, col, 0, 0, true); this.poly([a, b, ib, ia], y1, 2, col);
+    }
+  }
 }
 const hexCol = (h, k = 1) => { const c = new THREE.Color(h); return [c.r * k, c.g * k, c.b * k]; };
+function octagon(x0, z0, x1, z1, k) { const c = Math.min(x1 - x0, z1 - z0) * k; return [[x0 + c, z0], [x1 - c, z0], [x1, z0 + c], [x1, z1 - c], [x1 - c, z1], [x0 + c, z1], [x0, z1 - c], [x0, z0 + c]]; }
+function rotatedRect(x0, z0, x1, z1, a) { // the largest same-proportion rectangle turned by a that still fits the lot
+  const w = x1 - x0, d = z1 - z0, cs = Math.abs(Math.cos(a)), sn = Math.abs(Math.sin(a)); const k = Math.min(w / (w * cs + d * sn), d / (w * sn + d * cs));
+  const hw = w * k / 2, hd = d * k / 2, cx = (x0 + x1) / 2, cz = (z0 + z1) / 2, c = Math.cos(a), s = Math.sin(a);
+  return [[-hw, -hd], [hw, -hd], [hw, hd], [-hw, hd]].map(([x, z]) => [cx + x * c - z * s, cz + x * s + z * c]);
+}
 
 export class World {
   constructor(scene, props) {
@@ -58,7 +125,7 @@ export class World {
     this.root = new THREE.Group(); scene.add(this.root);
     this.colliders = []; this.grid = new Map(); this.stamp = 0;
     this.ramps = []; this.blocks = []; this.buildings = []; this.alleys = [];
-    this.parkingSlots = []; this.lights = []; this.specials = {};
+    this.parkingSlots = []; this.lights = []; this.specials = {}; this.rings = [];
     this.facadeMats = []; this.emissiveMats = []; this.nightMats = [];
     this.night = 0; this.time = 0;
   }
@@ -80,7 +147,13 @@ export class World {
     else if (ax > HALF + RW / 2 || az > HALF + RW / 2) h = CURB;
     else {
       const i = Math.floor((x + HALF) / P), j = Math.floor((z + HALF) / P);
-      if (i >= 0 && j >= 0 && i < NB && j < NB) { const cx = (i + 0.5) * P - HALF, cz = (j + 0.5) * P - HALF; if (Math.abs(x - cx) <= SLAB && Math.abs(z - cz) <= SLAB) h = CURB; }
+      if (i >= 0 && j >= 0 && i < NB && j < NB) {
+        const cx = (i + 0.5) * P - HALF, cz = (j + 0.5) * P - HALF;
+        if (Math.abs(x - cx) <= SLAB && Math.abs(z - cz) <= SLAB) {
+          h = CURB; const b = this.blocks[j * NB + i];
+          if (b && b.diag && Math.abs(b.diag > 0 ? (x - cx) - (z - cz) : (x - cx) + (z - cz)) < HH) h = 0; // the avenue
+        }
+      }
     }
     for (let k = 0; k < this.ramps.length; k++) {
       const r = this.ramps[k]; const dx = x - r.x, dz = z - r.z;
@@ -109,7 +182,8 @@ export class World {
     const steps = Math.ceil(Math.hypot(bx - ax, bz - az) / 3) + 1; let best = 1; const tmp = this._rc || (this._rc = []);
     this.query(Math.min(ax, bx) - pad, Math.min(az, bz) - pad, Math.max(ax, bx) + pad, Math.max(az, bz) + pad, tmp);
     for (const c of tmp) {
-      if (c.k !== 0 || !c.solid) continue;
+      if (!c.solid) continue;
+      if (c.k === 2 || c.k === 1) { const t = this.rayPrism(c, ax, ay, az, bx, by, bz, pad); if (t < best) best = t; continue; }
       // slab test in 3D
       let t0 = 0, t1 = 1; const d = [bx - ax, by - ay, bz - az], o = [ax, ay, az], mn = [c.x0 - pad, c.y0, c.z0 - pad], mx = [c.x1 + pad, c.y1, c.z1 + pad]; let ok = true;
       for (let a = 0; a < 3 && ok; a++) {
@@ -120,60 +194,118 @@ export class World {
     }
     void steps; return best;
   }
+  // segment vs vertical prism (convex polygon or circle) -> entry fraction, 1 if missed
+  rayPrism(c, ax, ay, az, bx, by, bz, pad) {
+    const dx = bx - ax, dy = by - ay, dz = bz - az; let t0 = 0, t1 = 1;
+    if (Math.abs(dy) < 1e-9) { if (ay < c.y0 || ay > c.y1) return 1; } else { let ta = (c.y0 - ay) / dy, tb = (c.y1 - ay) / dy; if (ta > tb) [ta, tb] = [tb, ta]; t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) return 1; }
+    if (c.k === 1) {
+      const ox = ax - c.x, oz = az - c.z, r = c.r + pad; const A = dx * dx + dz * dz, B = 2 * (ox * dx + oz * dz), C = ox * ox + oz * oz - r * r;
+      if (C < 0) return t0; if (A < 1e-9) return 1; const disc = B * B - 4 * A * C; if (disc < 0) return 1;
+      const sq = Math.sqrt(disc); const e0 = (-B - sq) / (2 * A), e1 = (-B + sq) / (2 * A); t0 = Math.max(t0, e0); t1 = Math.min(t1, e1); return t0 <= t1 ? t0 : 1;
+    }
+    for (let i = 0; i < c.nrm.length; i++) {
+      const [nx, nz] = c.nrm[i]; const num = c.off[i] + pad - (nx * ax + nz * az), den = nx * dx + nz * dz;
+      if (Math.abs(den) < 1e-9) { if (num < 0) return 1; continue; }
+      const t = num / den; if (den < 0) t0 = Math.max(t0, t); else t1 = Math.min(t1, t); if (t0 > t1) return 1;
+    }
+    return t0;
+  }
+  polyCollider(pts, y0, y1, solid = true) {
+    const p = orient(pts); const nrm = [], off = [];
+    for (let i = 0; i < p.length; i++) { const [ax, az] = p[i], [bx, bz] = p[(i + 1) % p.length]; const ex = bx - ax, ez = bz - az, l = Math.hypot(ex, ez) || 1; nrm.push([ez / l, -ex / l]); off.push((ez * ax - ex * az) / l); }
+    const [x0, z0, x1, z1] = bbox(p); return this.addCollider({ k: 2, pts: p, nrm, off, x0, z0, x1, z1, y0, y1, solid });
+  }
+  // how far (x,z) sits inside polygon collider c (negative = outside by that much) and the outward normal of the nearest face
+  polyDepth(c, x, z) {
+    let best = -1e9, bi = 0; for (let i = 0; i < c.nrm.length; i++) { const d = c.nrm[i][0] * x + c.nrm[i][1] * z - c.off[i]; if (d > best) { best = d; bi = i; } }
+    return { depth: -best, nx: c.nrm[bi][0], nz: c.nrm[bi][1] };
+  }
+  // closest point on a polygon's boundary (for round things touching a polygon from outside)
+  polyClosest(c, x, z) {
+    const p = c.pts; let bd = 1e9, qx = x, qz = z;
+    for (let i = 0; i < p.length; i++) { const [ax, az] = p[i], [bx, bz] = p[(i + 1) % p.length]; const ex = bx - ax, ez = bz - az; const L2 = ex * ex + ez * ez || 1; const t = clamp(((x - ax) * ex + (z - az) * ez) / L2, 0, 1); const px = ax + ex * t, pz = az + ez * t; const d = (x - px) ** 2 + (z - pz) ** 2; if (d < bd) { bd = d; qx = px; qz = pz; } }
+    return [qx, qz];
+  }
   addCollider(c) {
     c.stamp = 0; c.dead = false; this.colliders.push(c);
-    const x0 = c.k === 0 ? c.x0 : c.x - c.r, x1 = c.k === 0 ? c.x1 : c.x + c.r, z0 = c.k === 0 ? c.z0 : c.z - c.r, z1 = c.k === 0 ? c.z1 : c.z + c.r;
+    const bx = c.k !== 1; const x0 = bx ? c.x0 : c.x - c.r, x1 = bx ? c.x1 : c.x + c.r, z0 = bx ? c.z0 : c.z - c.r, z1 = bx ? c.z1 : c.z + c.r;
     const i0 = Math.floor((x0 + LIMIT + 40) / CELL), i1 = Math.floor((x1 + LIMIT + 40) / CELL);
     const j0 = Math.floor((z0 + LIMIT + 40) / CELL), j1 = Math.floor((z1 + LIMIT + 40) / CELL);
     for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) { const key = j * 1000 + i; let a = this.grid.get(key); if (!a) this.grid.set(key, a = []); a.push(c); }
     return c;
   }
   boxCollider(x0, x1, z0, z1, y0, y1, solid = true) { return this.addCollider({ k: 0, x0, x1, z0, z1, y0, y1, solid }); }
-  circleCollider(x, z, r, y0, y1, prop = null) { return this.addCollider({ k: 1, x, z, r, y0, y1, prop }); }
+  circleCollider(x, z, r, y0, y1, prop = null, solid = false) { return this.addCollider({ k: 1, x, z, r, y0, y1, prop, solid }); }
   // anything solid a car would hit (buildings, trees, poles, walls) — used by AI feelers
   blocked(x, z, pad = 0) {
     const t = this._bk || (this._bk = []); this.query(x - pad - 1, z - pad - 1, x + pad + 1, z + pad + 1, t);
     for (const c of t) {
       if (c.k === 0) { if (x > c.x0 - pad && x < c.x1 + pad && z > c.z0 - pad && z < c.z1 + pad && c.y1 > 0.5) return true; }
+      else if (c.k === 2) { if (c.y1 > 0.5 && inPoly(c.pts, x, z, pad)) return true; }
       else if (!c.prop && c.y1 > 0.5) { if (Math.hypot(x - c.x, z - c.z) < c.r + pad) return true; }
     }
     return false;
   }
   insideBuilding(x, z, pad = 0) {
     const t = this._ib || (this._ib = []); this.query(x - pad, z - pad, x + pad, z + pad, t);
-    for (const c of t) if (c.k === 0 && c.solid && x > c.x0 - pad && x < c.x1 + pad && z > c.z0 - pad && z < c.z1 + pad) return true;
+    for (const c of t) {
+      if (!c.solid) continue;
+      if (c.k === 0) { if (x > c.x0 - pad && x < c.x1 + pad && z > c.z0 - pad && z < c.z1 + pad) return true; }
+      else if (c.k === 2) { if (inPoly(c.pts, x, z, pad)) return true; }
+      else if (Math.hypot(x - c.x, z - c.z) < c.r + pad) return true;
+    }
     return false;
   }
+  onSlab(x, z) { return this.ground(x, z) > 0.05 && Math.abs(x) < LIMIT - 1 && Math.abs(z) < LIMIT - 1; }
 
   // ======================= road graph =======================
   nodePos(k, l) { return [k * P - HALF, l * P - HALF]; }
   nodeIndex(k, l) { return l * (NB + 1) + k; }
+  isDiagNode(k, l) { return !!(this.diagAdj && this.diagAdj.has(k + ',' + l)); }
+  isDiagEdge(a, b) { return a[0] !== b[0] && a[1] !== b[1]; }
+  // stop-line distance from a node: junctions where an avenue comes in are bigger
+  stopDist(k, l, diag = false) { return this.isDiagNode(k, l) ? (diag ? 23 : 20) : STOP; }
   nearestNode(x, z) { const k = clamp(Math.round((x + HALF) / P), 0, NB), l = clamp(Math.round((z + HALF) / P), 0, NB); return [k, l]; }
-  neighbors(k, l) { const out = []; if (k > 0) out.push([k - 1, l]); if (k < NB) out.push([k + 1, l]); if (l > 0) out.push([k, l - 1]); if (l < NB) out.push([k, l + 1]); return out; }
-  // light state for traffic travelling along axis ('x' or 'z') into node -> 'g' | 'y' | 'r'
+  neighbors(k, l) {
+    const out = []; if (k > 0) out.push([k - 1, l]); if (k < NB) out.push([k + 1, l]); if (l > 0) out.push([k, l - 1]); if (l < NB) out.push([k, l + 1]);
+    const d = this.diagAdj && this.diagAdj.get(k + ',' + l); if (d) for (const n of d) out.push(n);
+    return out;
+  }
+  // light state for traffic travelling along axis ('x', 'z' or 'd' for an avenue) into node -> 'g' | 'y' | 'r'
   lightState(k, l, axis) {
     if (!this.hasLight(k, l)) return 'g';
+    if (this.isDiagNode(k, l)) { // three phases: x, z, then the avenue
+      const t = (this.time + (k * 3.1 + l * 5.3)) % 33;
+      const ph = axis === 'x' ? 0 : axis === 'z' ? 11 : 22; const u = (t - ph + 33) % 33;
+      return u < 8 ? 'g' : u < 10.5 ? 'y' : 'r';
+    }
     const t = (this.time + (k * 3.1 + l * 5.3)) % 23;
     if (axis === 'x') return t < 8 ? 'g' : t < 10.5 ? 'y' : 'r';
     return t >= 11.5 && t < 19.5 ? 'g' : t >= 19.5 && t < 22 ? 'y' : 'r';
   }
+  axisOf(a, b) { return a[1] === b[1] ? 'x' : a[0] === b[0] ? 'z' : 'd'; }
   hasLight(k, l) { const edge = (k === 0 || k === NB) + (l === 0 || l === NB); return edge < 2; }
   // lane polyline from node a to node b in lane li
   lanePath(ak, al, bk, bl, li) {
     const [ax, az] = this.nodePos(ak, al), [bx, bz] = this.nodePos(bk, bl);
-    const dx = Math.sign(bx - ax), dz = Math.sign(bz - az); const rx = -dz, rz = dx; const off = LANES[li];
-    return [[ax + dx * STOP + rx * off, az + dz * STOP + rz * off], [bx - dx * STOP + rx * off, bz - dz * STOP + rz * off]];
+    let dx = bx - ax, dz = bz - az; const L = Math.hypot(dx, dz) || 1; dx /= L; dz /= L; const rx = -dz, rz = dx; const off = LANES[li];
+    const dg = ak !== bk && al !== bl; const sa = this.stopDist(ak, al, dg), sb = this.stopDist(bk, bl, dg);
+    return [[ax + dx * sa + rx * off, az + dz * sa + rz * off], [bx - dx * sb + rx * off, bz - dz * sb + rz * off]];
   }
-  turnPath(ak, al, bk, bl, ck, cl, li, lo = li) { // through node b from a towards c
+  turnPath(ak, al, bk, bl, ck, cl, li, lo = li) { // through node b from a towards c (any angle)
     const [ax, az] = this.nodePos(ak, al), [bx, bz] = this.nodePos(bk, bl), [cx, cz] = this.nodePos(ck, cl);
-    const d1x = Math.sign(bx - ax), d1z = Math.sign(bz - az), d2x = Math.sign(cx - bx), d2z = Math.sign(cz - bz);
+    let d1x = bx - ax, d1z = bz - az, d2x = cx - bx, d2z = cz - bz; const l1 = Math.hypot(d1x, d1z) || 1, l2 = Math.hypot(d2x, d2z) || 1; d1x /= l1; d1z /= l1; d2x /= l2; d2z /= l2;
     const o1 = LANES[li], o2 = LANES[lo];
-    const p0 = [bx - d1x * STOP + -d1z * o1, bz - d1z * STOP + d1x * o1];
-    const p2 = [bx + d2x * STOP + -d2z * o2, bz + d2z * STOP + d2x * o2];
-    let c;
-    if (d1x === d2x && d1z === d2z) c = [(p0[0] + p2[0]) / 2, (p0[1] + p2[1]) / 2];
-    else { const s = (p2[0] - p0[0]) * d1x + (p2[1] - p0[1]) * d1z; c = [p0[0] + d1x * s, p0[1] + d1z * s]; }
-    const pts = []; const n = 7;
+    const s1 = this.stopDist(bk, bl, ak !== bk && al !== bl), s2 = this.stopDist(bk, bl, bk !== ck && bl !== cl);
+    const p0 = [bx - d1x * s1 - d1z * o1, bz - d1z * s1 + d1x * o1];
+    const p2 = [bx + d2x * s2 - d2z * o2, bz + d2z * s2 + d2x * o2];
+    const cr = d1x * d2z - d1z * d2x; let c;
+    if (Math.abs(cr) < 0.05) c = [(p0[0] + p2[0]) / 2, (p0[1] + p2[1]) / 2];
+    else { // control point where the incoming and outgoing lane lines meet
+      const t = clamp(((p2[0] - p0[0]) * d2z - (p2[1] - p0[1]) * d2x) / cr, 1, Math.hypot(p2[0] - p0[0], p2[1] - p0[1]) * 1.3);
+      c = [p0[0] + d1x * t, p0[1] + d1z * t];
+    }
+    const pts = []; const n = 8;
     for (let i = 1; i <= n; i++) { const t = i / n, a = (1 - t) * (1 - t), b = 2 * (1 - t) * t, d = t * t; pts.push([a * p0[0] + b * c[0] + d * p2[0], a * p0[1] + b * c[1] + d * p2[1]]); }
     return pts;
   }
@@ -189,6 +321,7 @@ export class World {
     const R = rng(20251120);
     const step = async (p, label) => { progress(p, label); await new Promise((r) => setTimeout(r, 0)); };
     await step(0.05, 'Pouring asphalt');
+    this.setupDiagonals();
     this.makeMaterials();
     this.buildGround();
     await step(0.15, 'Painting the streets');
@@ -200,6 +333,7 @@ export class World {
     await step(0.6, 'Wiring the traffic lights');
     this.buildIntersections();
     this.buildStreetFurniture(R);
+    this.buildAvenueFurniture(R);
     await step(0.72, 'Planting trees');
     this.buildEdge(R);
     this.finishMeshes();
@@ -249,7 +383,9 @@ export class World {
       for (const axis of ['x', 'z']) {
         const [ax, az] = axis === 'x' ? this.nodePos(k, l) : this.nodePos(l, k);
         const dx = axis === 'x' ? 1 : 0, dz = axis === 'x' ? 0 : 1, yaw = axis === 'x' ? Math.PI / 2 : 0;
-        const s0 = 13.6, s1 = P - 13.6, len = s1 - s0, mid = (s0 + s1) / 2;
+        const [kA, lA] = axis === 'x' ? [k, l] : [l, k], [kB, lB] = axis === 'x' ? [k + 1, l] : [l, k + 1];
+        const stA = this.stopDist(kA, lA), stB = this.stopDist(kB, lB);
+        const s0 = stA - 0.4, s1 = P - stB + 0.4, len = s1 - s0, mid = (s0 + s1) / 2;
         const at = (s, off) => [ax + dx * s - dz * off, az + dz * s + dx * off];
         for (const off of [-0.16, 0.16]) { const [x, z] = at(mid, off); add(yq, x, z, yaw, 0.12, len); }
         for (const off of [-7.4, 7.4]) { const [x, z] = at(mid, off); add(quads, x, z, yaw, 0.16, len); }
@@ -257,12 +393,24 @@ export class World {
         // parking bay ticks
         for (const off of [-8.7, 8.7]) for (let s = 20.75; s < P - 20; s += 6.5) { const [x, z] = at(s, off); add(quads, x, z, yaw + Math.PI / 2, 0.1, 2.4); }
         // stop lines (inbound side) + crosswalks at both ends
-        for (const [s, sideSign] of [[STOP, -1], [P - STOP, 1]]) {
+        for (const [s, sideSign] of [[stA, -1], [P - stB, 1]]) {
           const [x, z] = at(s, sideSign * 3.8); add(quads, x, z, yaw + Math.PI / 2, 0.45, 7.2);
           const cs = s - sideSign * -2.0; // crosswalk centre just inside the stop line
           for (let o = -9.2; o <= 9.2; o += 1.25) { const [cx, cz] = at(s + sideSign * 2.2, o); add(quads, cx, cz, yaw, 0.62, 3.0); }
           void cs;
         }
+      }
+    }
+    // the avenues: double yellow, lane dashes, edge lines, stop lines and zebra crossings at both ends
+    for (const D of this.diags) for (let i = 0; i + 1 < D.nodes.length; i++) {
+      const [ax, az] = this.nodePos(...D.nodes[i]), [bx, bz] = this.nodePos(...D.nodes[i + 1]); const L = Math.hypot(bx - ax, bz - az); const dx = (bx - ax) / L, dz = (bz - az) / L; const yaw = Math.atan2(dx, dz);
+      const at = (s, off) => [ax + dx * s - dz * off, az + dz * s + dx * off]; const s0 = 22.6, s1 = L - 22.6, mid = (s0 + s1) / 2;
+      for (const off of [-0.16, 0.16]) { const [x, z] = at(mid, off); add(yq, x, z, yaw, 0.12, s1 - s0); }
+      for (const off of [-7.4, 7.4]) { const [x, z] = at(mid, off); add(quads, x, z, yaw, 0.16, s1 - s0); }
+      for (const off of [-3.8, 3.8]) for (let s = s0 + 2; s < s1 - 3; s += 9) { const [x, z] = at(s + 1.5, off); add(quads, x, z, yaw, 0.13, 3); }
+      for (const [s, side] of [[23, -1], [L - 23, 1]]) {
+        const [x, z] = at(s, side * 3.8); add(quads, x, z, yaw + Math.PI / 2, 0.45, 7.2);
+        for (let o = -7.2; o <= 7.2; o += 1.25) { const [cx, cz] = at(s + side * 2.4, o); add(quads, cx, cz, yaw, 0.62, 3.0); }
       }
     }
     const make = (arr, mat) => {
@@ -274,6 +422,33 @@ export class World {
     make(quads, this.mat.line); make(yq, this.mat.yline);
   }
 
+  setupDiagonals() {
+    this.diagAdj = new Map(); this.diagBlocks = new Map(); this.diags = DIAGS;
+    const add = (a, b) => { const k = a[0] + ',' + a[1]; if (!this.diagAdj.has(k)) this.diagAdj.set(k, []); this.diagAdj.get(k).push(b); };
+    for (const D of DIAGS) {
+      let [k, l] = D.from; D.nodes = [[k, l]];
+      for (let st = 0; st < D.n; st++) {
+        const nk = k + D.dir[0], nl = l + D.dir[1]; add([k, l], [nk, nl]); add([nk, nl], [k, l]);
+        this.diagBlocks.set(Math.min(k, nk) + ',' + Math.min(l, nl), D.dir[0] * D.dir[1] > 0 ? 1 : -1); k = nk; l = nl; D.nodes.push([k, l]);
+      }
+    }
+  }
+  // sidewalk loops pedestrians walk round, and which corners connect across a street (straight across a grid
+  // street, or square across an avenue)
+  linkRings() {
+    const all = []; for (const r of this.rings) r.pts.forEach((p, i) => all.push([r, i, p]));
+    for (const [r, i, p] of all) {
+      r.links[i] = [];
+      for (const [r2, j, q] of all) {
+        if (r2 === r) continue; const dx = q[0] - p[0], dz = q[1] - p[1], d = Math.hypot(dx, dz); if (d > 30 || d < 3) continue;
+        const mx = (p[0] + q[0]) / 2, mz = (p[1] + q[1]) / 2; if (this.ground(mx, mz) > 0.05) continue;
+        const [nk, nl] = this.nearestNode(mx, mz); const [nx, nz] = this.nodePos(nk, nl); if (Math.hypot(mx - nx, mz - nz) < 9) continue;
+        const grid = Math.abs(dx) < 2.5 || Math.abs(dz) < 2.5;
+        const b = r.block, b2 = r2.block; const avenue = b === b2 && b.diag && Math.abs(Math.abs(dx) - Math.abs(dz)) < 3 && Math.sign(dx) * Math.sign(dz) === -b.diag;
+        if (grid || avenue) r.links[i].push({ ring: r2, idx: j });
+      }
+    }
+  }
   layoutBlocks(R) {
     for (let j = 0; j < NB; j++) for (let i = 0; i < NB; i++) {
       const cx = (i + 0.5) * P - HALF, cz = (j + 0.5) * P - HALF;
@@ -285,6 +460,12 @@ export class World {
       let kind = SPECIAL_BLOCKS[`${i},${j}`] || 'buildings';
       const b = { i, j, cx, cz, district, kind, districtName: DISTRICTS[kind === 'park' ? 'park' : kind === 'stunt' ? 'stunt' : district].name, alley: null, items: [] };
       if (kind === 'buildings' && district !== 'downtown' && R.chance(0.5)) b.alley = R.chance(0.5) ? 'x' : 'z';
+      b.diag = this.diagBlocks.get(i + ',' + j) || 0; if (b.diag) b.alley = null;
+      const sq = [[cx - SLAB, cz - SLAB], [cx + SLAB, cz - SLAB], [cx + SLAB, cz + SLAB], [cx - SLAB, cz + SLAB]];
+      if (!b.diag) b.pieces = [sq];
+      else if (b.diag > 0) b.pieces = [[[cx + HH - SLAB, cz - SLAB], [cx + SLAB, cz - SLAB], [cx + SLAB, cz + SLAB - HH]], [[cx - SLAB, cz + HH - SLAB], [cx + SLAB - HH, cz + SLAB], [cx - SLAB, cz + SLAB]]].map(orient);
+      else b.pieces = [[[cx + SLAB, cz + HH - SLAB], [cx + SLAB, cz + SLAB], [cx + HH - SLAB, cz + SLAB]], [[cx - SLAB, cz - SLAB], [cx + SLAB - HH, cz - SLAB], [cx - SLAB, cz + SLAB - HH]]].map(orient);
+      b.rings = b.pieces.map((pc) => ({ pts: inset(pc, 2.6), block: b, links: [] })); this.rings.push(...b.rings);
       this.blocks.push(b);
     }
     // landmarks
@@ -293,6 +474,7 @@ export class World {
     at(1, 3).alley = null; at(6, 6).alley = null; at(5, 2).alley = null; at(3, 6).alley = null;
     at(4, 4).special = 'tower';
     at(3, 1).special = 'store'; at(3, 1).alley = null; at(7, 5).special = 'store'; at(7, 5).alley = null;
+    this.linkRings();
   }
 
   // ---------- blocks ----------
@@ -301,7 +483,7 @@ export class World {
     for (const b of this.blocks) {
       const { cx, cz } = b; const x0 = cx - SLAB, x1 = cx + SLAB, z0 = cz - SLAB, z1 = cz + SLAB;
       // curb sides
-      G.curb.sides(x0, x1, 0, CURB, z0, z1, 3, 3, [1, 1, 1]);
+      if (!b.diag) G.curb.sides(x0, x1, 0, CURB, z0, z1, 3, 3, [1, 1, 1]);
       const sidewalkCol = b.district === 'downtown' ? [0.95, 0.95, 0.97] : b.district === 'industrial' || b.district === 'harbor' ? [0.82, 0.8, 0.78] : [0.9, 0.88, 0.85];
       if (b.kind === 'park') {
         // sidewalk ring + grass lot + crossing paths
@@ -320,6 +502,9 @@ export class World {
       } else if (b.kind === 'plaza') {
         G.top.top(x0, x1, CURB, z0, z1, 4, [0.92, 0.88, 0.82]);
         this.buildPlaza(b, R);
+      } else if (b.diag) { // split by an avenue: two wedge-shaped islands
+        for (const pc of b.pieces) { G.curb.prism(pc, 0, CURB, 3, 3, [1, 1, 1]); G.top.poly(pc, CURB, 4, sidewalkCol); }
+        this.buildWedges(b, R);
       } else {
         G.top.top(x0, x1, CURB, z0, z1, 4, sidewalkCol);
         this.buildLot(b, R);
@@ -361,24 +546,33 @@ export class World {
     this.makeBuilding(b, x0, z0, x1, z1, R);
   }
 
-  makeBuilding(b, x0, z0, x1, z1, R) {
-    const D = b.district; const gap = D === 'downtown' ? 0.6 : R.range(0.4, 1.6);
-    x0 += gap; z0 += gap; x1 -= gap; z1 -= gap;
-    const dist = Math.hypot(b.cx, b.cz);
+  pickBuilding(b, R) {
+    const D = b.district; const dist = Math.hypot(b.cx, b.cz);
     let h, style;
     if (D === 'downtown') { h = R.range(55, 120) + Math.max(0, 160 - dist * 0.9) * R.range(0.3, 0.9); style = R.pick(['glass', 'glass', 'teal', 'dark', 'office']); }
     else if (D === 'midtown') { h = R.range(14, 48); style = R.pick(['office', 'stucco', 'brick', 'dark', 'office', 'glass']); }
     else if (D === 'heights') { h = R.range(9, 26); style = R.pick(['brick', 'brick', 'stucco']); }
     else { h = R.range(7, 15); style = R.pick(['warehouse', 'warehouse', 'brick']); }
-    if (b.special === 'tower' && !b.towerDone) { h = 245; b.towerDone = true; }
-    const F = this.facade[style]; const y0 = CURB;
+    let tower = false; if (b.special === 'tower' && !b.towerDone) { h = 245; b.towerDone = true; tower = true; }
     const tintBase = style === 'stucco' ? R.pick([0xf4e1c6, 0xe8d0d0, 0xd6e4e8, 0xf0ecd8, 0xdde5cf, 0xf3d6b8]) : style === 'warehouse' ? R.pick([0xb8c0c8, 0xc9a68b, 0x9fb3a6, 0xd0d0d0]) : 0xffffff;
-    const tint = hexCol(tintBase, R.range(0.86, 1.04));
+    return { h, style, tint: hexCol(tintBase, R.range(0.86, 1.04)), tower };
+  }
+  makeBuilding(b, x0, z0, x1, z1, R) {
+    const D = b.district; const gap = D === 'downtown' ? 0.6 : R.range(0.4, 1.6);
+    x0 += gap; z0 += gap; x1 -= gap; z1 -= gap;
+    const { h, style, tint, tower } = this.pickBuilding(b, R);
+    const w = x1 - x0, d = z1 - z0, v = R(), cx = (x0 + x1) / 2, cz = (z0 + z1) / 2;
+    // footprint variety: not every lot gets a plain box
+    if (tower) return this.polyBuilding(b, octagon(x0, z0, x1, z1, 0.24), h, style, tint, R, true);
+    if ((D === 'downtown' || D === 'midtown') && w > 13 && d > 13 && v < 0.11) return this.roundBuilding(b, cx, cz, Math.min(w, d) / 2, h, D === 'midtown' ? 'glass' : style, tint, R);
+    if (D === 'industrial' && w > 9 && d > 9 && v < 0.16) return this.silos(b, x0, z0, x1, z1, R);
+    if (D !== 'industrial' && w > 10 && d > 10 && v < 0.27) return this.polyBuilding(b, octagon(x0, z0, x1, z1, R.range(0.14, 0.3)), h, style, tint, R);
+    if (D !== 'downtown' && w > 12 && d > 12 && v < 0.38) { this.polyBuilding(b, rotatedRect(x0, z0, x1, z1, R.range(0.22, 0.6) * (R.chance(0.5) ? 1 : -1)), h, style, tint, R); this.lotTrees(b, x0, z0, x1, z1, R); return; }
+    const F = this.facade[style]; const y0 = CURB;
     // setback sections for tall buildings
     const sections = [];
     if (h > 70 && R.chance(0.7)) {
       const h1 = h * R.range(0.45, 0.6), h2 = h * R.range(0.78, 0.88); const ins1 = R.range(0.12, 0.2), ins2 = R.range(0.25, 0.34);
-      const w = x1 - x0, d = z1 - z0;
       sections.push([x0, z0, x1, z1, y0, y0 + h1]);
       sections.push([x0 + w * ins1, z0 + d * ins1, x1 - w * ins1, z1 - d * ins1, y0 + h1, y0 + h2]);
       sections.push([x0 + w * ins2, z0 + d * ins2, x1 - w * ins2, z1 - d * ins2, y0 + h2, y0 + h]);
@@ -408,7 +602,74 @@ export class World {
     this.boxCollider(x0 - 0.3, x1 + 0.3, z0 - 0.3, z1 + 0.3, 0, CURB + h);
     this.buildings.push({ x0, z0, x1, z1, h, style });
   }
-
+  // any convex footprint: octagons, rotated slabs, flatiron wedges along the avenues
+  polyBuilding(b, poly, h, style, tint, R, tower = false) {
+    const D = b.district; const F = this.facade[style]; const y0 = CURB; poly = orient(poly);
+    const sections = [];
+    if (h > 70 && (tower || R.chance(0.7))) { const h1 = h * R.range(0.45, 0.6), h2 = h * R.range(0.78, 0.88); sections.push([poly, y0, y0 + h1], [scalePoly(poly, 0.8), y0 + h1, y0 + h2], [scalePoly(poly, 0.6), y0 + h2, y0 + h]); }
+    else sections.push([poly, y0, y0 + h]);
+    for (const [sp, sy0, sy1] of sections) {
+      F.gb.prism(sp, sy0, sy1, F.tw, F.th, tint, sy0 - y0);
+      this.gb.roof.poly(sp, sy1, 4, [0.75, 0.75, 0.75]);
+      if (style !== 'glass' && style !== 'teal') this.gb.props.ring(sp, sy1, sy1 + 0.9, 0.35, [0.62, 0.6, 0.58]);
+      else this.gb.metal.ring(inset(sp, -0.15), sy1 - 0.2, sy1 + 0.5, 0.3, [1, 1, 1]);
+    }
+    const hasShop = (D === 'midtown' || D === 'heights' || D === 'downtown') && style !== 'warehouse';
+    if (hasShop && h > 8) { const S = R.pick(this.shops); S.gb.prism(inset(poly, -0.25), y0, y0 + 4.5, 12, 4.5, [1, 1, 1]); this.gb.metal.ring(inset(poly, -0.65), y0 + 4.5, y0 + 4.85, 0.45, [1, 1, 1]); }
+    const top = sections[sections.length - 1][0], ty = sections[sections.length - 1][2]; const [bx0, bz0, bx1, bz1] = bbox(top); const [ccx, ccz] = centroid(top);
+    for (let k = 0, n = 0; k < 12 && n < 3; k++) { const ax = R.range(bx0, bx1), az = R.range(bz0, bz1); if (!inPoly(top, ax, az, -2.4)) continue; n++; this.gb.props.box(ax - 1, ax + 1, ty, ty + 1.2, az - 0.8, az + 0.8, [0.72, 0.74, 0.76]); this.gb.props.box(ax - 0.7, ax + 0.7, ty + 1.2, ty + 1.3, az - 0.5, az + 0.5, [0.3, 0.3, 0.32]); }
+    if (h > 120) { const hgt = R.range(14, 34); const m = new THREE.Matrix4().makeTranslation(ccx, ty + hgt / 2, ccz); this.gb.metal.geo(new THREE.CylinderGeometry(0.25, 0.55, hgt, 6), m, [1, 1, 1]); this.props.beacon(ccx, ty + hgt + 0.3, ccz); }
+    else if (style === 'brick' && R.chance(0.4) && inPoly(top, ccx, ccz, -3)) this.waterTower(ccx, ccz, ty, R);
+    this.polyCollider(inset(poly, -0.3), 0, CURB + h);
+    const [x0, z0, x1, z1] = bbox(poly); this.buildings.push({ x0, z0, x1, z1, h, style, poly });
+  }
+  roundBuilding(b, cx, cz, r, h, style, tint, R) {
+    const N = 22; const circ = (rr) => Array.from({ length: N }, (_, i) => { const a = (i / N) * Math.PI * 2; return [cx + Math.cos(a) * rr, cz + Math.sin(a) * rr]; });
+    const D = b.district; const F = this.facade[style]; const y0 = CURB; const tiers = h > 70 ? [[1, 0.5], [0.84, 0.82], [0.66, 1]] : [[1, 1]];
+    let yb = y0;
+    for (const [k, f] of tiers) {
+      const yt = y0 + h * f; const pts = orient(circ(r * k));
+      F.gb.prism(pts, yb, yt, F.tw, F.th, tint, yb - y0); this.gb.roof.poly(pts, yt, 4, [0.75, 0.75, 0.75]); this.gb.metal.ring(orient(circ(r * k + 0.2)), yt - 0.2, yt + 0.6, 0.35, [1, 1, 1]); yb = yt;
+    }
+    if ((D === 'midtown' || D === 'downtown') && h > 8) { const S = R.pick(this.shops); S.gb.prism(orient(circ(r + 0.25)), y0, y0 + 4.5, 12, 4.5, [1, 1, 1]); }
+    const top = r * tiers[tiers.length - 1][0];
+    if (h > 120) { const hgt = R.range(18, 36); const m = new THREE.Matrix4().makeTranslation(cx, y0 + h + hgt / 2, cz); this.gb.metal.geo(new THREE.CylinderGeometry(0.25, 0.6, hgt, 6), m, [1, 1, 1]); this.props.beacon(cx, y0 + h + hgt + 0.3, cz); }
+    else if (top > 8 && h > 40 && R.chance(0.5)) this.helipad(cx, y0 + h + 0.05, cz, top * 0.6);
+    this.circleCollider(cx, cz, r + 0.3, 0, CURB + h, null, true);
+    this.buildings.push({ x0: cx - r, z0: cz - r, x1: cx + r, z1: cz + r, h, style, poly: circ(r), round: true });
+    this.lotTrees(b, cx - r, cz - r, cx + r, cz + r, R);
+  }
+  // grain silos / tanks for the industrial district
+  silos(b, x0, z0, x1, z1, R) {
+    const w = x1 - x0, d = z1 - z0, along = w >= d; const n = Math.max(1, Math.min(4, Math.floor((along ? w : d) / ((along ? d : w) * 0.95)))); const r = (along ? d : w) * 0.42; const h = R.range(12, 22);
+    const F = this.facade.warehouse; const col = hexCol(R.pick([0xd9d9d6, 0xc8ccd0, 0xb9b2a4]), 1);
+    for (let i = 0; i < n; i++) {
+      const t = (i + 0.5) / n; const cx = along ? x0 + w * t : (x0 + x1) / 2, cz = along ? (z0 + z1) / 2 : z0 + d * t;
+      const pts = orient(Array.from({ length: 18 }, (_, k) => { const a = (k / 18) * Math.PI * 2; return [cx + Math.cos(a) * r, cz + Math.sin(a) * r]; }));
+      F.gb.prism(pts, CURB, CURB + h, F.tw, F.th, col); this.gb.roof.poly(pts, CURB + h, 4, [0.7, 0.7, 0.7]);
+      const m = new THREE.Matrix4().makeTranslation(cx, CURB + h + r * 0.3, cz); this.gb.metal.geo(new THREE.ConeGeometry(r * 1.02, r * 0.6, 18), m, [1, 1, 1]);
+      this.circleCollider(cx, cz, r + 0.25, 0, CURB + h + r * 0.6, null, true);
+      this.buildings.push({ x0: cx - r, z0: cz - r, x1: cx + r, z1: cz + r, h, style: 'warehouse', poly: pts, round: true });
+    }
+  }
+  // a few street trees in the open space a rotated or round building leaves behind
+  lotTrees(b, x0, z0, x1, z1, R) {
+    if (b.district === 'industrial') return;
+    for (const [x, z] of [[x0 + 1.2, z0 + 1.2], [x1 - 1.2, z0 + 1.2], [x1 - 1.2, z1 - 1.2], [x0 + 1.2, z1 - 1.2]]) if (R.chance(0.6) && !this.insideBuilding(x, z, 1.4) && this.onSlab(x, z)) this.props.tree(x, z, CURB, R.range(0.6, 0.85), 'leaf');
+  }
+  // split blocks along an avenue: a regular corner building plus two wedges with blunt flatiron noses
+  buildWedges(b, R) {
+    for (const pc of b.pieces) {
+      const lot = inset(pc, SW); const n = lot.length; let ci = 0;
+      for (let i = 0; i < n; i++) { const a = lot[(i - 1 + n) % n], c0 = lot[i], c1 = lot[(i + 1) % n]; const ux = a[0] - c0[0], uz = a[1] - c0[1], vx = c1[0] - c0[0], vz = c1[1] - c0[1]; if (Math.abs(ux * vx + uz * vz) < 1e-3 * Math.hypot(ux, uz) * Math.hypot(vx, vz)) { ci = i; break; } }
+      const C = lot[ci], T1 = lot[(ci + 1) % n], T2 = lot[(ci - 1 + n) % n]; const U = [T1[0] - C[0], T1[1] - C[1]], V = [T2[0] - C[0], T2[1] - C[1]];
+      const s = R.range(0.38, 0.46); const at = (u, v) => [C[0] + U[0] * u + V[0] * v, C[1] + U[1] * u + V[1] * v];
+      const [qx0, qz0, qx1, qz1] = bbox([at(0, 0), at(s, 0), at(s, s), at(0, s)]); this.subdivide(b, [qx0, qz0, qx1, qz1], R, 2);
+      for (const w of [orient([at(s, 0), at(1, 0), at(s, 1 - s)]), orient([at(0, s), at(s, s), at(s, 1 - s), at(0, 1)])]) {
+        const { h, style, tint } = this.pickBuilding(b, R); this.polyBuilding(b, bluntTips(inset(w, 0.7), 2.4), h, style, tint, R);
+      }
+    }
+  }
   waterTower(x, z, y, R) {
     const wood = [0.42, 0.28, 0.18]; const m = new THREE.Matrix4();
     for (const [dx, dz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { m.makeTranslation(x + dx * 1.2, y + 1.5, z + dz * 1.2); this.gb.props.geo(new THREE.CylinderGeometry(0.08, 0.08, 3, 5), m, [0.2, 0.2, 0.2]); }
@@ -601,13 +862,14 @@ export class World {
   buildIntersections() {
     for (let l = 0; l <= NB; l++) for (let k = 0; k <= NB; k++) {
       if (!this.hasLight(k, l)) continue;
-      const [nx, nz] = this.nodePos(k, l);
-      for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-        // approach from node (k - dx, l - dz) exists?
-        const ak = k - dx, al = l - dz; if (ak < 0 || al < 0 || ak > NB || al > NB) continue;
-        const rx = -dz, rz = dx; // right of travel
-        const px = nx - dx * 11.2 + rx * 11.2, pz = nz - dz * 11.2 + rz * 11.2;
-        this.props.trafficLight(px, pz, dx, dz, rx, rz, k, l, Math.abs(dx) ? 'x' : 'z');
+      const [nx, nz] = this.nodePos(k, l); const big = this.isDiagNode(k, l);
+      for (const [ak, al] of this.neighbors(k, l)) {
+        const [ax, az] = this.nodePos(ak, al); let dx = nx - ax, dz = nz - az; const L = Math.hypot(dx, dz); dx /= L; dz /= L; const rx = -dz, rz = dx;
+        const dg = ak !== k && al !== l; const half = (dg ? DH : RW / 2) + 1.2;
+        // corner of the junction on the right of the approach; at the big avenue junctions slide back until it's on a sidewalk
+        let t = big ? this.stopDist(k, l, dg) - 1.5 : 11.2, px = 0, pz = 0;
+        for (let tries = 0; tries < 16; tries++) { px = nx - dx * t + rx * half; pz = nz - dz * t + rz * half; if (this.onSlab(px, pz) && !this.insideBuilding(px, pz, 0.6)) break; t += 1; }
+        this.props.trafficLight(px, pz, dx, dz, rx, rz, k, l, this.axisOf([ak, al], [k, l]));
         this.circleCollider(px, pz, 0.22, 0, 7);
       }
     }
@@ -625,16 +887,17 @@ export class World {
         const leafy = blk && (blk.district === 'heights' || blk.district === 'midtown' || blk.kind === 'park');
         for (let s = 24; s < P - 20; s += 30) {
           const x = ax + dx * (s + (side > 0 ? 6 : 0)) + ox * edge, z = az + dz * (s + (side > 0 ? 6 : 0)) + oz * edge;
-          this.props.streetlight(x, z, Math.atan2(-ox, -oz), CURB);
+          if (this.onSlab(x, z) && !this.insideBuilding(x, z, 0.5)) this.props.streetlight(x, z, Math.atan2(-ox, -oz), CURB);
         }
         if (outer) continue;
-        if (leafy) for (let s = 16; s < P - 14; s += 15) { const x = ax + dx * (s + 7) + ox * (RW / 2 + 1.4), z = az + dz * (s + 7) + oz * (RW / 2 + 1.4); if (R.chance(0.75) && !this.nearRamp(x, z)) this.props.tree(x, z, CURB, R.range(0.75, 1.05), 'leaf'); }
+        if (leafy) for (let s = 16; s < P - 14; s += 15) { const x = ax + dx * (s + 7) + ox * (RW / 2 + 1.4), z = az + dz * (s + 7) + oz * (RW / 2 + 1.4); if (R.chance(0.75) && !this.nearRamp(x, z) && this.onSlab(x, z) && !this.insideBuilding(x, z, 0.8)) this.props.tree(x, z, CURB, R.range(0.75, 1.05), 'leaf'); }
         // misc props near block corners
         if (blk && blk.kind !== 'park') {
-          if (R.chance(0.7)) this.props.add('hydrant', ax + dx * 18 + ox * (RW / 2 + 0.9), az + dz * 18 + oz * (RW / 2 + 0.9), 0, CURB);
-          if (R.chance(0.5)) this.props.add('mailbox', ax + dx * (P - 22) + ox * (RW / 2 + 0.9), az + dz * (P - 22) + oz * (RW / 2 + 0.9), Math.atan2(ox, oz), CURB);
-          if (R.chance(0.6)) this.props.add('trash', ax + dx * (P / 2 + 4) + ox * (RW / 2 + 0.9), az + dz * (P / 2 + 4) + oz * (RW / 2 + 0.9), 0, CURB);
-          if (blk.district !== 'industrial' && R.chance(0.35)) this.props.add('bench', ax + dx * (P / 2 - 6) + ox * (RW / 2 + 4.2), az + dz * (P / 2 - 6) + oz * (RW / 2 + 4.2), Math.atan2(ox, oz) + Math.PI, CURB);
+          const put = (kind, s, lat, yaw) => { const x = ax + dx * s + ox * lat, z = az + dz * s + oz * lat; if (this.onSlab(x, z) && !this.insideBuilding(x, z, 0.6)) this.props.add(kind, x, z, yaw, CURB); };
+          if (R.chance(0.7)) put('hydrant', blk.diag ? 30 : 18, RW / 2 + 0.9, 0);
+          if (R.chance(0.5)) put('mailbox', P - 22, RW / 2 + 0.9, Math.atan2(ox, oz));
+          if (R.chance(0.6)) put('trash', P / 2 + 4, RW / 2 + 0.9, 0);
+          if (blk.district !== 'industrial' && R.chance(0.35)) put('bench', P / 2 - 6, RW / 2 + 4.2, Math.atan2(ox, oz) + Math.PI);
         }
         // parking slots on the right-hand strip for traffic heading +axis when side=+1 ... both strips used
         for (let s = 24; s < P - 24; s += 6.5) {
@@ -648,6 +911,18 @@ export class World {
     }
   }
 
+  // lamps and trees down both sides of each avenue
+  buildAvenueFurniture(R) {
+    for (const D of this.diags) for (let i = 0; i + 1 < D.nodes.length; i++) {
+      const [ax, az] = this.nodePos(...D.nodes[i]), [bx, bz] = this.nodePos(...D.nodes[i + 1]); const L = Math.hypot(bx - ax, bz - az); const dx = (bx - ax) / L, dz = (bz - az) / L;
+      const blk = this.blockAt((ax + bx) / 2 + 20 * dz, (az + bz) / 2 - 20 * dx); const leafy = blk && blk.district !== 'industrial';
+      for (const side of [-1, 1]) {
+        const ox = -dz * side, oz = dx * side;
+        for (let s = 32 + (side > 0 ? 13 : 0); s < L - 30; s += 26) { const x = ax + dx * s + ox * (DH + 0.8), z = az + dz * s + oz * (DH + 0.8); if (this.onSlab(x, z) && !this.insideBuilding(x, z, 0.5)) this.props.streetlight(x, z, Math.atan2(-ox, -oz), CURB); }
+        if (leafy) for (let s = 38; s < L - 34; s += 13) { const x = ax + dx * s + ox * (DH + 1.7), z = az + dz * s + oz * (DH + 1.7); if (R.chance(0.7) && this.onSlab(x, z) && !this.insideBuilding(x, z, 1)) this.props.tree(x, z, CURB, R.range(0.75, 1.0), 'leaf'); }
+      }
+    }
+  }
   buildEdge(R) {
     // promenade ring between the outer roads and the sea wall
     const a = HALF + RW / 2, b = LIMIT; const col = [0.92, 0.9, 0.86];

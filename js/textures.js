@@ -316,6 +316,116 @@ export function plate() {
 
 export function taxiSign() { return label('TAXI', { w: 256, h: 96, bg: '#ffd60a', fg: '#111', size: 70 }); }
 
+// ---------- car lamp atlas ----------
+// One canvas holds every lens. `map` is what the lamp looks like switched off (clear/red/amber glass over a
+// reflector), `glow` is a greyscale mask of which parts light up. Regions are [u0, v0, u1, v1].
+export function carLights() {
+  const W = 1024, H = 512; const [c, x] = cv(W, H); const [gc, g] = cv(W, H);
+  g.fillStyle = '#000'; g.fillRect(0, 0, W, H);
+  const R = {}; const reg = (k, px, py, pw, ph) => { R[k] = [px / W, 1 - (py + ph) / H, (px + pw) / W, 1 - py / H]; return [px, py, pw, ph]; };
+  const rr = (ctx, X, Y, w, h, r) => { ctx.beginPath(); ctx.moveTo(X + r, Y); ctx.arcTo(X + w, Y, X + w, Y + h, r); ctx.arcTo(X + w, Y + h, X, Y + h, r); ctx.arcTo(X, Y + h, X, Y, r); ctx.arcTo(X, Y, X + w, Y, r); ctx.closePath(); };
+  const glass = (X, Y, w, h) => { // subtle lens sheen + dark rim so the edge reads crisply
+    const s = x.createLinearGradient(X, Y, X + w * 0.6, Y + h); s.addColorStop(0, 'rgba(255,255,255,0.16)'); s.addColorStop(0.45, 'rgba(255,255,255,0.03)'); s.addColorStop(1, 'rgba(255,255,255,0)');
+    x.fillStyle = s; x.fillRect(X, Y, w, h); x.strokeStyle = 'rgba(0,0,0,0.85)'; x.lineWidth = 7; x.strokeRect(X + 3, Y + 3, w - 6, h - 6);
+  };
+  // --- headlight: twin projectors in a dark chrome housing, LED accent along the bottom
+  {
+    const [X, Y, w, h] = reg('head', 0, 0, 512, 256);
+    const bg = x.createLinearGradient(0, Y, 0, Y + h); bg.addColorStop(0, '#3a3f46'); bg.addColorStop(0.5, '#1c1f24'); bg.addColorStop(1, '#2c3036'); x.fillStyle = bg; x.fillRect(X, Y, w, h);
+    for (let i = 0; i < 26; i++) { x.fillStyle = `rgba(255,255,255,${0.03 + (i % 2) * 0.025})`; x.fillRect(X + i * 20, Y, 9, h); } // reflector ribs
+    for (const [cx, r] of [[X + 150, 82], [X + 360, 66]]) {
+      const cy = Y + h * 0.46;
+      const ring = x.createRadialGradient(cx - r * 0.3, cy - r * 0.3, r * 0.2, cx, cy, r * 1.25); ring.addColorStop(0, '#e9edf2'); ring.addColorStop(0.55, '#8b939d'); ring.addColorStop(1, '#2a2e34');
+      x.fillStyle = ring; x.beginPath(); x.arc(cx, cy, r * 1.22, 0, 7); x.fill();
+      x.fillStyle = '#0b0c0e'; x.beginPath(); x.arc(cx, cy, r * 0.82, 0, 7); x.fill();
+      const lens = x.createRadialGradient(cx - r * 0.25, cy - r * 0.3, 2, cx, cy, r * 0.8); lens.addColorStop(0, 'rgba(210,225,255,0.9)'); lens.addColorStop(0.25, 'rgba(90,110,140,0.55)'); lens.addColorStop(1, 'rgba(10,12,16,0)');
+      x.fillStyle = lens; x.beginPath(); x.arc(cx, cy, r * 0.8, 0, 7); x.fill();
+      const gl = g.createRadialGradient(cx, cy, 0, cx, cy, r * 1.2); gl.addColorStop(0, '#fff'); gl.addColorStop(0.62, '#f2f2f2'); gl.addColorStop(0.72, '#444'); gl.addColorStop(1, '#1a1a1a');
+      g.fillStyle = gl; g.beginPath(); g.arc(cx, cy, r * 1.2, 0, 7); g.fill();
+    }
+    x.fillStyle = '#9aa2ab'; x.fillRect(X + 30, Y + h - 40, w - 60, 12); x.fillStyle = '#e8ecf0'; for (let i = 0; i < 18; i++) x.fillRect(X + 40 + i * 24, Y + h - 38, 12, 8);
+    g.fillStyle = '#555'; g.fillRect(X + 30, Y + h - 40, w - 60, 12);
+    g.fillStyle = 'rgba(255,255,255,0.1)'; g.fillRect(X, Y, w, h);
+    glass(X, Y, w, h);
+  }
+  // --- DRL light-guide strip
+  {
+    const [X, Y, w, h] = reg('drl', 512, 0, 512, 48);
+    x.fillStyle = '#1a1c20'; x.fillRect(X, Y, w, h); x.fillStyle = '#c9ced6'; x.fillRect(X + 10, Y + 14, w - 20, h - 28);
+    g.fillStyle = '#fff'; g.fillRect(X + 10, Y + 12, w - 20, h - 24); glass(X, Y, w, h);
+  }
+  // --- front indicator: amber reflector behind clear glass
+  {
+    const [X, Y, w, h] = reg('turnF', 512, 64, 256, 128);
+    const bg = x.createLinearGradient(X, 0, X + w, 0); bg.addColorStop(0, '#6e4a12'); bg.addColorStop(1, '#a5701e'); x.fillStyle = bg; x.fillRect(X, Y, w, h);
+    for (let i = 0; i < 12; i++) { x.fillStyle = `rgba(255,220,150,${0.08 + (i % 2) * 0.1})`; x.fillRect(X, Y + i * 11, w, 5); }
+    g.fillStyle = '#e6e6e6'; g.fillRect(X + 6, Y + 6, w - 12, h - 12); glass(X, Y, w, h);
+  }
+  // --- tail / brake: deep red lens with LED light bars and a darker smoked edge
+  {
+    const [X, Y, w, h] = reg('tail', 0, 256, 512, 256);
+    const bg = x.createLinearGradient(0, Y, 0, Y + h); bg.addColorStop(0, '#4a0507'); bg.addColorStop(0.5, '#6a090c'); bg.addColorStop(1, '#3a0405'); x.fillStyle = bg; x.fillRect(X, Y, w, h);
+    for (let i = 0; i < 34; i++) { x.fillStyle = `rgba(0,0,0,${0.18 + (i % 2) * 0.12})`; x.fillRect(X + i * 15, Y, 6, h); } // fresnel ribs
+    const bars = [[0.2, 0.16], [0.47, 0.16], [0.74, 0.14]];
+    for (const [fy, fh] of bars) {
+      rr(x, X + 26, Y + h * fy, w - 52, h * fh, 14); x.fillStyle = '#a3171b'; x.fill(); x.strokeStyle = '#2a0203'; x.lineWidth = 4; x.stroke();
+      rr(g, X + 26, Y + h * fy, w - 52, h * fh, 14); g.fillStyle = '#fff'; g.fill();
+    }
+    g.fillStyle = 'rgba(255,255,255,0.32)'; g.fillRect(X + 10, Y + 10, w - 20, h - 20);
+    glass(X, Y, w, h);
+  }
+  // --- reverse: clear lens, chrome reflector
+  {
+    const [X, Y, w, h] = reg('rev', 512, 256, 256, 128);
+    const bg = x.createLinearGradient(0, Y, 0, Y + h); bg.addColorStop(0, '#9aa1a9'); bg.addColorStop(1, '#4b5058'); x.fillStyle = bg; x.fillRect(X, Y, w, h);
+    for (let i = 0; i < 16; i++) { x.fillStyle = `rgba(255,255,255,${0.06 + (i % 2) * 0.12})`; x.fillRect(X + i * 16, Y, 7, h); }
+    g.fillStyle = '#f0f0f0'; g.fillRect(X + 6, Y + 6, w - 12, h - 12); glass(X, Y, w, h);
+  }
+  // --- rear indicator: amber lens
+  {
+    const [X, Y, w, h] = reg('turnR', 768, 256, 256, 128);
+    const bg = x.createLinearGradient(0, Y, 0, Y + h); bg.addColorStop(0, '#8a4a08'); bg.addColorStop(1, '#5a2e04'); x.fillStyle = bg; x.fillRect(X, Y, w, h);
+    for (let i = 0; i < 16; i++) { x.fillStyle = `rgba(0,0,0,${0.12 + (i % 2) * 0.1})`; x.fillRect(X + i * 16, Y, 7, h); }
+    g.fillStyle = '#ececec'; g.fillRect(X + 6, Y + 6, w - 12, h - 12); glass(X, Y, w, h);
+  }
+  // --- side marker (amber, small)
+  {
+    const [X, Y, w, h] = reg('mark', 768, 64, 256, 64);
+    x.fillStyle = '#a45f0c'; x.fillRect(X, Y, w, h); for (let i = 0; i < 8; i++) { x.fillStyle = 'rgba(0,0,0,0.18)'; x.fillRect(X + i * 32, Y, 12, h); }
+    g.fillStyle = '#ddd'; g.fillRect(X + 4, Y + 4, w - 8, h - 8); glass(X, Y, w, h);
+  }
+  // --- honeycomb grille
+  {
+    const [X, Y, w, h] = reg('grille', 768, 384, 256, 128);
+    x.fillStyle = '#060708'; x.fillRect(X, Y, w, h); x.strokeStyle = '#2b2f35'; x.lineWidth = 3;
+    for (let j = 0; j < 9; j++) for (let i = 0; i < 18; i++) { const cx = X + i * 15 + (j % 2) * 7.5, cy = Y + j * 15; x.beginPath(); for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; x.lineTo(cx + Math.cos(a) * 7, cy + Math.sin(a) * 7); } x.closePath(); x.stroke(); }
+    x.strokeStyle = '#9aa2ab'; x.lineWidth = 6; x.strokeRect(X + 3, Y + 3, w - 6, h - 6);
+  }
+  const map = tex(c, { repeat: false }); const glow = tex(gc, { repeat: false });
+  return { map, glow, R };
+}
+
+// smooth body-panel normal map: door gaps, swage line and a little orange-peel so paint isn't a perfect mirror
+export function carPanels(type) {
+  const W = 512, H = 160; const h = new Float32Array(W * H); const nz = makeNoise(64, 9);
+  const L = type.L, Ht = type.H, p = type.prof;
+  const U = (z) => ((z + L / 2) / L) * W, V = (y) => H - (y / Ht) * H;
+  for (let j = 0; j < H; j++) for (let i = 0; i < W; i++) h[j * W + i] = nz(i * 0.5, j * 0.5) * 0.08;
+  const line = (u0, v0, u1, v1, depth, wdt = 1.2) => {
+    const n = Math.ceil(Math.hypot(u1 - u0, v1 - v0)) + 1;
+    for (let k = 0; k <= n; k++) { const u = u0 + (u1 - u0) * k / n, v = v0 + (v1 - v0) * k / n;
+      for (let dj = -2; dj <= 2; dj++) for (let di = -2; di <= 2; di++) { const ii = Math.round(u) + di, jj = Math.round(v) + dj; if (ii < 0 || jj < 0 || ii >= W || jj >= H) continue; const d = Math.hypot(di, dj); if (d <= wdt) h[jj * W + ii] -= depth * (1 - d / (wdt + 0.5)); } }
+  };
+  // swage line along the flank
+  for (let i = 0; i < W; i++) { const v = V(p.beltH - 0.12); for (let dj = -3; dj <= 3; dj++) { const jj = Math.round(v) + dj; if (jj >= 0 && jj < H) h[jj * W + i] += 0.6 * Math.exp(-dj * dj / 3); } }
+  const doors = type.cargo ? [[p.ws - 0.05, p.ws - 1.15]] : type.L < 4.2 || ['Sports', 'Super', 'Muscle'].includes(type.cls) ? [[p.ws - 0.05, p.rr + 0.2]] : [[p.ws - 0.05, (p.ws + p.rr) / 2 + 0.05], [(p.ws + p.rr) / 2 + 0.05, p.rr - 0.05]];
+  for (const [zf, zr] of doors) {
+    line(U(zf), V(p.beltH), U(zf + 0.05), V(type.clear + 0.14), 2.2); line(U(zf + 0.05), V(type.clear + 0.14), U(zr), V(type.clear + 0.14), 2.2); line(U(zr), V(type.clear + 0.14), U(zr), V(p.beltH), 2.2);
+    for (let k = 0; k < 18; k++) line(U(zr) + 7, V(p.beltH - 0.12) + 1, U(zr) + 7 + k, V(p.beltH - 0.12) + 1, 0.5, 1.6); // handle recess
+  }
+  return normalFromHeight(h, W, H, 1.6);
+}
+
 // ---------- characters ----------
 export function face() {
   const [c, x] = cv(128, 128); x.fillStyle = '#fff'; x.fillRect(0, 0, 128, 128);

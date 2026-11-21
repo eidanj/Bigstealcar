@@ -83,7 +83,7 @@ export class Props {
   }
   beacon(x, y, z) { this.beacons.push([x, y, z]); }
   water(x, y, z, r) {
-    if (!this.waterMat) { const n = TX.waterNormal(); n.repeat.set(2, 2); this.waterMat = new THREE.MeshStandardMaterial({ color: 0x3f7f95, roughness: 0.05, metalness: 0.2, normalMap: n, normalScale: new THREE.Vector2(0.4, 0.4) }); }
+    if (!this.waterMat) { const n = TX.waterNormal(); n.repeat.set(2, 2); this.waterMat = new THREE.MeshStandardMaterial({ color: 0x3f7f95, roughness: 0.16, metalness: 0.1, normalMap: n, normalScale: new THREE.Vector2(0.3, 0.3) }); this.waterMat.onBeforeCompile = (sh) => { sh.fragmentShader = sh.fragmentShader.replace('#include <lights_fragment_end>', '#include <lights_fragment_end>\n  reflectedLight.directSpecular = min( reflectedLight.directSpecular, vec3( 1.1 ) );'); }; this.waterMat.customProgramCacheKey = () => 'bsc-pond'; }
     const m = new THREE.Mesh(new THREE.CircleGeometry(r, 32).rotateX(-Math.PI / 2), this.waterMat); m.position.set(x, y, z); m.receiveShadow = true; this.root.add(m);
   }
 
@@ -261,6 +261,7 @@ export class Props {
         // bounce off buildings
         world.query(r.pos.x - 0.5, r.pos.z - 0.5, r.pos.x + 0.5, r.pos.z + 0.5, tmp);
         for (const c of tmp) {
+          if (c.k === 2 && r.pos.y < c.y1) { const pd = world.polyDepth(c, r.pos.x, r.pos.z); if (pd.depth > 0) { r.pos.x += pd.nx * pd.depth; r.pos.z += pd.nz * pd.depth; const vn = r.vel.x * pd.nx + r.vel.z * pd.nz; if (vn < 0) { r.vel.x -= vn * pd.nx * 1.3; r.vel.z -= vn * pd.nz * 1.3; } } continue; }
           if (c.k !== 0 || r.pos.y > c.y1) continue;
           if (r.pos.x > c.x0 && r.pos.x < c.x1 && r.pos.z > c.z0 && r.pos.z < c.z1) {
             const dx0 = r.pos.x - c.x0, dx1 = c.x1 - r.pos.x, dz0 = r.pos.z - c.z0, dz1 = c.z1 - r.pos.z; const mn = Math.min(dx0, dx1, dz0, dz1);

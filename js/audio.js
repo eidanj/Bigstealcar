@@ -103,6 +103,7 @@ export class AudioEngine {
   busted() { this.tone(196, 'sawtooth', 1.4, 0.12, 0, this.sfx, 98); this.tone(147, 'square', 1.4, 0.06, 0.05, this.sfx, 73); this.burst(400, 0.5, 1.2, 0.2); }
   knockout() { this.tone(440, 'sine', 1.2, 0.14, 0, this.sfx, 110); this.burst(300, 0.5, 0.8, 0.3); }
   ui() { this.tone(1400, 'square', 0.04, 0.05); }
+  tick(on) { this.burst(on ? 2600 : 1800, 6, 0.018, 0.14, 'bandpass'); this.tone(on ? 1900 : 1300, 'square', 0.012, 0.04); }
   uiBack() { this.tone(700, 'square', 0.05, 0.05); }
   door() { this.burst(600, 1.2, 0.08, 0.25); this.tone(160, 'sine', 0.1, 0.2); }
   jump() { }

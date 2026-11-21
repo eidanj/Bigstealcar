@@ -4,10 +4,8 @@ import { CITY } from './config.js';
 import { Character, SKIN, HAIR, SHIRT, PANTS } from './humans.js';
 import { R, clamp } from './util.js';
 
-const { NB, P, SLAB } = CITY;
-const D = SLAB - 2.6; // sidewalk centre line offset from block centre
-const SIGNS = [[-1, -1], [1, -1], [1, 1], [-1, 1]];
-const idxOf = (sx, sz) => SIGNS.findIndex(([a, b]) => a === sx && b === sz);
+// Pedestrians walk round sidewalk loops ("rings": one per block, two per block split by an avenue) and
+// cross the street where the world says two ring corners face each other across a crossing.
 const V3 = THREE.Vector3; const _w = new V3(), _v = new V3();
 
 export function randomLook() {
@@ -17,35 +15,41 @@ export function randomLook() {
 export class Peds {
   constructor(game) { this.game = game; this.list = []; this.cops = []; this.timer = 0; }
   get walkers() { return this.list; }
-  corner(b, i) { const [sx, sz] = SIGNS[i]; return [b.cx + sx * D, b.cz + sz * D]; }
+  corner(r, i) { return r.pts[i]; }
 
   spawn(minD = 55, maxD = 150) {
     const g = this.game, W = g.world; const f = g.focus;
     for (let t = 0; t < 20; t++) {
-      const b = W.blocks[Math.floor(Math.random() * W.blocks.length)];
-      const ci = Math.floor(Math.random() * 4), cj = (ci + 1) % 4; const [ax, az] = this.corner(b, ci), [bx, bz] = this.corner(b, cj); const u = Math.random();
+      const b = W.rings[Math.floor(Math.random() * W.rings.length)]; const n = b.pts.length;
+      const ci = Math.floor(Math.random() * n), cj = (ci + 1) % n; const [ax, az] = this.corner(b, ci), [bx, bz] = this.corner(b, cj); const u = Math.random();
       const x = ax + (bx - ax) * u, z = az + (bz - az) * u; const d = Math.hypot(x - f.x, z - f.z);
       if (d < minD || d > maxD) continue; if (g.inView(x, z, 2) && d < 110) continue;
-      const ch = new Character(g, randomLook(), x, z, 0); if (ch.slot == null) { ch.dispose(); return null; }
-      ch.brain = { block: b, target: cj, dir: 1, mode: 'walk', speed: R.range(1.15, 1.6), wait: 0 }; ch.health = 60;
+      const naughty = Math.random() < 1 / 60; // the odd troublemaker: fights back, takes potshots at cruisers
+      const look = naughty ? { ...randomLook(), shirt: R.pick([0x1d1f24, 0x2b0f12, 0x24301f]), sleeve: 0x16181c, pants: 0x14161a, hair: 0x111111 } : randomLook();
+      const ch = new Character(g, look, x, z, 0); if (ch.slot == null) { ch.dispose(); return null; }
+      ch.brain = { ring: b, target: cj, dir: 1, mode: 'walk', speed: R.range(1.15, 1.6), wait: 0 }; ch.health = naughty ? 80 : 60; ch.naughty = naughty;
       if (Math.random() < 0.5) { ch.brain.dir = -1; ch.brain.target = ci; }
       this.list.push(ch); return ch;
     }
     return null;
   }
   adopt(ch, panic = 4) { // a car-jacked driver becomes a pedestrian
-    const b = this.nearestBlock(ch.pos.x, ch.pos.z); ch.state = 'walk'; ch.visible = true; ch.scale = 1; ch.pos.y = this.game.world.ground(ch.pos.x, ch.pos.z);
-    ch.brain = { block: b, target: 0, dir: 1, mode: 'return', speed: R.range(1.2, 1.6), wait: 0 }; ch.panic = panic; ch.health = 60; ch.cop = false; this.list.push(ch); return ch;
+    const b = this.nearestRing(ch.pos.x, ch.pos.z); ch.state = 'walk'; ch.visible = true; ch.scale = 1; ch.pos.y = this.game.world.ground(ch.pos.x, ch.pos.z);
+    ch.brain = { ring: b, target: 0, dir: 1, mode: 'return', speed: R.range(1.2, 1.6), wait: 0 }; ch.panic = panic; ch.health = 60; ch.cop = false; this.list.push(ch); return ch;
   }
-  nearestBlock(x, z) { const i = clamp(Math.floor((x + CITY.HALF) / P), 0, NB - 1), j = clamp(Math.floor((z + CITY.HALF) / P), 0, NB - 1); return this.game.world.blocks[j * NB + i]; }
-  remove(ch) { const i = this.list.indexOf(ch); if (i >= 0) this.list.splice(i, 1); ch.dispose(); }
+  nearestRing(x, z) { let best = null, bd = 1e9; for (const r of this.game.world.rings) for (const [px, pz] of r.pts) { const d = (px - x) ** 2 + (pz - z) ** 2; if (d < bd) { bd = d; best = r; } } return best; }
+  remove(ch) { const i = this.list.indexOf(ch); if (i >= 0) this.list.splice(i, 1); ch.gun = null; ch.dispose(); }
 
   update(dt) {
     const g = this.game; const f = g.focus;
     this.timer -= dt;
     if (this.timer <= 0) {
       this.timer = 0.4;
-      for (const ch of [...this.list]) { const d = Math.hypot(ch.pos.x - f.x, ch.pos.z - f.z); if (d > 175 || (d > 120 && !g.inView(ch.pos.x, ch.pos.z, 2) && this.list.length > g.pedTarget)) this.remove(ch); }
+      for (const ch of [...this.list]) {
+        const d = Math.hypot(ch.pos.x - f.x, ch.pos.z - f.z);
+        if (ch.surrender) { ch.surT = (ch.surT || 0) + 0.4; if ((ch.surT > 9 && !g.inView(ch.pos.x, ch.pos.z, 2)) || ch.surT > 45) { this.remove(ch); continue; } } // taken into custody
+        if (d > 175 || (d > 120 && !g.inView(ch.pos.x, ch.pos.z, 2) && this.list.length > g.pedTarget)) this.remove(ch);
+      }
       if (this.list.length < g.pedTarget) this.spawn();
     }
     for (const ch of this.list) this.think(ch, dt);
@@ -66,7 +70,14 @@ export class Peds {
 
   think(ch, dt) {
     const g = this.game, W = g.world, B = ch.brain;
-    if (ch.state !== 'walk') { ch.physicsRagdoll(dt); if (ch.state === 'walk') { B.mode = 'return'; ch.panic = 2.5; } ch.animate(dt); this.carHits(ch); return; }
+    ch.phone = B.mode === 'call'; ch.surrender = B.mode === 'surrender';
+    if (ch.state !== 'walk') { ch.aimPose = false; ch.physicsRagdoll(dt); if (ch.state === 'walk' && B.mode !== 'surrender') { B.mode = 'return'; ch.panic = 2.5; } ch.animate(dt); this.carHits(ch); return; }
+    if (ch.punchT > 0) ch.punchT -= dt;
+    if (B.mode === 'call' || B.mode === 'surrender') { // on the phone to the cops / hands up, waiting to be taken in
+      const pp = g.player.char.pos; if (B.mode === 'call') ch.faceToward(pp.x - ch.pos.x, pp.z - ch.pos.z, dt, 5);
+      ch.panic = 0; ch.move(dt, _w.set(0, 0, 0)); ch.animate(dt); this.carHits(ch); return;
+    }
+    if (ch.naughty && this.troublemaker(ch, dt)) return;
     // threats
     const th = this.threat(ch);
     if (th) { ch.panic = 2.2; B.flee = [-(th.vz) * Math.sign(th.lat || 1), (th.vx) * Math.sign(th.lat || 1)]; }
@@ -74,32 +85,27 @@ export class Peds {
     if (ch.panic > 0) {
       ch.panic -= dt; sp = 5.2;
       if (B.flee) wish.set(B.flee[0], 0, B.flee[1]);
-      else { const [tx, tz] = this.corner(B.block, B.target); wish.set(tx - ch.pos.x, 0, tz - ch.pos.z); }
+      else { const [tx, tz] = this.corner(B.ring, B.target % B.ring.pts.length); wish.set(tx - ch.pos.x, 0, tz - ch.pos.z); }
       if (ch.panic <= 0) { B.mode = 'return'; B.flee = null; }
     } else if (B.mode === 'walk' || B.mode === 'return') {
-      if (B.mode === 'return') { // head to the closest corner of our block
-        let bd = 1e9; for (let i = 0; i < 4; i++) { const [x, z] = this.corner(B.block, i); const d = Math.hypot(x - ch.pos.x, z - ch.pos.z); if (d < bd) { bd = d; B.target = i; } } B.mode = 'walk';
+      const n = B.ring.pts.length;
+      if (B.mode === 'return') { // head to the closest corner of our loop
+        let bd = 1e9; for (let i = 0; i < n; i++) { const [x, z] = this.corner(B.ring, i); const d = Math.hypot(x - ch.pos.x, z - ch.pos.z); if (d < bd) { bd = d; B.target = i; } } B.mode = 'walk';
       }
-      const [tx, tz] = this.corner(B.block, B.target); const dx = tx - ch.pos.x, dz = tz - ch.pos.z; const d = Math.hypot(dx, dz);
+      const [tx, tz] = this.corner(B.ring, B.target); const dx = tx - ch.pos.x, dz = tz - ch.pos.z; const d = Math.hypot(dx, dz);
       if (d < 0.7) {
         // at a corner: maybe cross the street
-        const [sx, sz] = SIGNS[B.target];
-        const opts = [];
-        if (B.block.i + sx >= 0 && B.block.i + sx < NB) opts.push([sx, 0]);
-        if (B.block.j + sz >= 0 && B.block.j + sz < NB) opts.push([0, sz]);
-        if (opts.length && Math.random() < 0.22) {
-          const [di, dj] = opts[Math.floor(Math.random() * opts.length)];
-          const nb = W.blocks[(B.block.j + dj) * NB + (B.block.i + di)]; const ni = idxOf(di ? -sx : sx, dj ? -sz : sz);
-          B.mode = 'cross'; B.next = { block: nb, idx: ni }; B.wait = 0;
-        } else B.target = (B.target + B.dir + 4) % 4;
+        const opts = B.ring.links[B.target] || [];
+        if (opts.length && Math.random() < 0.22) { B.mode = 'cross'; B.next = opts[Math.floor(Math.random() * opts.length)]; B.wait = 0; }
+        else B.target = (B.target + B.dir + n) % n;
       } else wish.set(dx / d, 0, dz / d);
     } else if (B.mode === 'cross') {
-      const [tx, tz] = this.corner(B.next.block, B.next.idx); const dx = tx - ch.pos.x, dz = tz - ch.pos.z; const d = Math.hypot(dx, dz);
+      const [tx, tz] = this.corner(B.next.ring, B.next.idx); const dx = tx - ch.pos.x, dz = tz - ch.pos.z; const d = Math.hypot(dx, dz);
       // wait for a gap in traffic before stepping off the curb
-      const onCurb = W.blockAt(ch.pos.x, ch.pos.z) === B.block;
+      const onCurb = W.ground(ch.pos.x, ch.pos.z) > 0.05;
       let carNear = false; if (onCurb) for (const car of g.cars) if (car.speed > 2 && Math.hypot(car.pos.x - (ch.pos.x + tx) / 2, car.pos.z - (ch.pos.z + tz) / 2) < 22) { carNear = true; break; }
-      if (carNear) { B.wait += dt; if (B.wait > 7) { B.mode = 'walk'; B.target = (B.target + B.dir + 4) % 4; } }
-      else if (d < 0.7) { B.block = B.next.block; B.target = (B.next.idx + B.dir + 4) % 4; B.mode = 'walk'; }
+      if (carNear) { B.wait += dt; if (B.wait > 7) { B.mode = 'walk'; B.target = (B.target + B.dir + B.ring.pts.length) % B.ring.pts.length; } }
+      else if (d < 0.7) { B.ring = B.next.ring; B.target = (B.next.idx + B.dir + B.ring.pts.length) % B.ring.pts.length; B.mode = 'walk'; }
       else { wish.set(dx / d, 0, dz / d); sp *= 1.25; }
     }
     if (wish.lengthSq() > 0) { wish.normalize().multiplyScalar(sp); ch.faceToward(wish.x, wish.z, dt, ch.panic > 0 ? 14 : 8); }
@@ -107,6 +113,79 @@ export class Peds {
     ch.animate(dt);
     this.carHits(ch);
   }
+
+  // ---------------- troublemakers ----------------
+  // returns true when it handled movement itself (fighting, shooting, running from the cops)
+  troublemaker(ch, dt) {
+    const g = this.game, W = g.world, B = ch.brain, pc = g.player.char; const wish = _w.set(0, 0, 0);
+    ch.aimPose = false;
+    if (B.mode === 'walk' || B.mode === 'return') {
+      B.scanT = (B.scanT || 0) - dt; ch.ambushCD = Math.max(0, (ch.ambushCD || 0) - dt);
+      if (B.scanT <= 0 && ch.ambushCD <= 0 && g.state === 'play') {
+        B.scanT = 0.5;
+        for (const car of g.cars) {
+          if (car.role !== 'police' || car.dead || !car.driver || car === g.playerCar || (car.ai && car.ai.suspect)) continue;
+          const d = Math.hypot(car.pos.x - ch.pos.x, car.pos.z - ch.pos.z);
+          if (d > 6 && d < 26 && Math.random() < 0.2 && W.raycast(ch.pos.x, 1.4, ch.pos.z, car.pos.x, 1.1, car.pos.z) >= 1) { B.mode = 'ambush'; B.target = car; B.shots = 3 + Math.floor(Math.random() * 3); B.shootT = 0.7; ch.armed = true; break; }
+        }
+      }
+      return false;
+    }
+    const dpx = pc.pos.x - ch.pos.x, dpz = pc.pos.z - ch.pos.z, dp = Math.hypot(dpx, dpz);
+    const gun = () => { if (!ch.gun) { ch.gun = g.weapons.takeGun(); if (!ch.handM) ch.handM = new THREE.Matrix4(); } };
+    if (B.mode === 'fight') { // squaring up after being punched
+      if (g.playerCar || pc.state !== 'walk' || dp > 30 || g.state !== 'play') { B.mode = 'return'; return false; }
+      ch.faceToward(dpx, dpz, dt, 14);
+      if (dp > 1.15) wish.set(dpx / dp * 4.6, 0, dpz / dp * 4.6);
+      B.punchCD = (B.punchCD ?? 0.3) - dt;
+      if (dp < 1.5 && B.punchCD <= 0) { ch.punchDur = 0.34; ch.punchT = 0.34; ch.punchArm = 1 - (ch.punchArm || 0); B.punchCD = 0.75 + Math.random() * 0.45; B.hitPending = true; g.audio.swing(false); }
+      if (B.hitPending && ch.punchT < 0.34 * 0.55) { B.hitPending = false; if (dp < 1.7) { g.player.hurt(7, 'punch'); pc.vel.x += dpx / dp * 2.2; pc.vel.z += dpz / dp * 2.2; g.audio.punchHit(true, false); g.rig.shake(0.08); } }
+      this.copsNotice(ch, dt);
+    } else if (B.mode === 'shootback') { // you shot at them: they shoot back from cover distance
+      B.t = (B.t || 0) + dt; const target = g.playerCar ? g.playerCar.pos : pc.pos;
+      const dx = target.x - ch.pos.x, dz = target.z - ch.pos.z, d = Math.hypot(dx, dz);
+      if (d > 45 || B.t > 25 || pc.state !== 'walk' && !g.playerCar || g.state !== 'play') { B.mode = 'flee'; B.t = 0; return true; }
+      gun(); ch.faceToward(dx, dz, dt, 14); ch.aimPose = true; ch.aimPitch = 0; ch.twoHand = false;
+      if (d < 7) wish.set(-dx / d * 3, 0, -dz / d * 3); else if (d > 16) wish.set(dx / d * 3.5, 0, dz / d * 3.5);
+      B.shootT = (B.shootT ?? 0.8) - dt;
+      if (B.shootT <= 0 && W.raycast(ch.pos.x, 1.45, ch.pos.z, target.x, 1.2, target.z) >= 1) { B.shootT = 0.9 + Math.random() * 0.6; g.weapons.npcShoot(g.weapons.muzzlePos(ch, ch.gun), clamp(0.4 - d * 0.015, 0.1, 0.4), 6); }
+      this.copsNotice(ch, dt);
+    } else if (B.mode === 'ambush') { // taking potshots at a cruiser, then legging it
+      const car = B.target;
+      if (!car || !g.cars.includes(car) || car.dead) { B.mode = 'flee'; B.t = 0; return true; }
+      gun(); const dx = car.pos.x - ch.pos.x, dz = car.pos.z - ch.pos.z; ch.faceToward(dx, dz, dt, 14); ch.aimPose = true; ch.aimPitch = -0.08; ch.twoHand = false;
+      B.shootT -= dt;
+      if (B.shootT <= 0) {
+        B.shootT = 0.45 + Math.random() * 0.35; B.shots--;
+        g.weapons.npcShootAt(g.weapons.muzzlePos(ch, ch.gun), car, 0.6, 7);
+        if (!B.reported) { B.reported = true; this.becomeSuspect(ch, car, '~r~Someone opened fire on a police cruiser!~w~ The ~b~cops~w~ are going after them.'); }
+        if (B.shots <= 0) { B.mode = 'flee'; B.t = 0; ch.ambushCD = 40; }
+      }
+    } else if (B.mode === 'flee') { // run from the nearest cop
+      B.t = (B.t || 0) + dt; let fx = 0, fz = 0, nd = 1e9;
+      for (const c of g.cars) if (c.role === 'police' && !c.dead) { const d = Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z); if (d < nd) { nd = d; fx = ch.pos.x - c.pos.x; fz = ch.pos.z - c.pos.z; } }
+      for (const c of this.cops) { const d = Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z); if (d < nd) { nd = d; fx = ch.pos.x - c.pos.x; fz = ch.pos.z - c.pos.z; } }
+      if (nd > 70 && B.t > 6) { B.mode = 'return'; ch.panic = 0; return false; }
+      const fl = Math.hypot(fx, fz) || 1; wish.set(fx / fl * 5.3, 0, fz / fl * 5.3);
+      // don't run straight into a wall: slide along it
+      if (W.blocked(ch.pos.x + wish.x * 0.5, ch.pos.z + wish.z * 0.5, 0.3)) wish.set(-wish.z, 0, wish.x);
+      ch.faceToward(wish.x, wish.z, dt, 12);
+    } else return false;
+    ch.move(dt, wish, false, 14); ch.animate(dt); this.carHits(ch); return true;
+  }
+  // a cop who can see the troublemaker brawling goes after them
+  copsNotice(ch, dt) {
+    ch.noticeT = (ch.noticeT || 0) - dt; if (ch.noticeT > 0 || ch.wantedBy) return; ch.noticeT = 1;
+    for (const car of this.game.cars) if (car.role === 'police' && !car.dead && car.driver && car.ai && !car.ai.suspect && Math.hypot(car.pos.x - ch.pos.x, car.pos.z - ch.pos.z) < 60) { this.becomeSuspect(ch, car, 'A ~b~patrol car~w~ spotted the brawl.'); return; }
+  }
+  becomeSuspect(ch, car, msg) {
+    const g = this.game; let n = 0;
+    if (car && car.ai && car.ai.setSuspect && car.ai.setSuspect({ ch })) n++;
+    for (const c of g.cars) { if (n >= 2) break; if (c === car || c.role !== 'police' || c.dead || !c.ai || !c.ai.setSuspect || c.ai.suspect) continue; if (Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z) < 110 && c.ai.setSuspect({ ch })) n++; }
+    if (n) { ch.wantedBy = true; if (Math.hypot(g.focus.x - ch.pos.x, g.focus.z - ch.pos.z) < 110) g.hud.help(msg, 3); }
+  }
+  // the player hit a troublemaker: they don't run, they fight
+  provoked(ch, melee) { if (!ch.naughty || ch.state !== 'walk' || ch.brain.mode === 'surrender') return; ch.panic = 0; ch.brain.flee = null; ch.brain.mode = melee && !ch.armed ? 'fight' : 'shootback'; ch.brain.t = 0; if (!melee) ch.armed = true; }
 
   // cars vs people: knock over or nudge aside
   carHits(ch) {
@@ -133,20 +212,36 @@ export class Peds {
   }
 
   // ---------------- officers on foot ----------------
-  spawnCop(car) {
+  spawnCop(car, target = null) {
     const g = this.game; const look = { skin: R.pick(SKIN), hair: 0x101830, shirt: 0x1b2a4a, pants: 0x121a2e, shoes: 0x111111, sleeve: 0x1b2a4a };
     const x = car.pos.x + car.left.x * (car.ex + 0.6), z = car.pos.z + car.left.z * (car.ex + 0.6);
     const ch = new Character(g, look, x, z, car.yaw); if (ch.slot == null) { ch.dispose(); return null; }
-    ch.cop = true; ch.car = car; ch.health = 90; ch.brain = { mode: 'chase', speed: 4.9 }; this.cops.push(ch); car.officer = ch; return ch;
+    ch.cop = true; ch.car = car; ch.health = 90; ch.brain = { mode: 'chase', speed: 4.9 }; ch.target = target; this.cops.push(ch); car.officer = ch; return ch;
   }
   updateCops(dt) {
     const g = this.game, W = g.world;
     for (const ch of [...this.cops]) {
       if (ch.state !== 'walk') { ch.aimPose = false; ch.physicsRagdoll(dt); ch.animate(dt); this.carHits(ch); continue; }
       const car = ch.car && g.cars.includes(ch.car) && !ch.car.dead ? ch.car : null; const pc = g.player.char; const pp = pc.pos;
-      const chase = !g.playerCar && g.wanted.stars > 0 && pc.state === 'walk' && g.state === 'play';
+      const sus = ch.target && this.list.includes(ch.target) && ch.target.state === 'walk' && ch.target.brain.mode !== 'surrender' ? ch.target : null;
+      if (ch.target && !sus) ch.target = null;
+      const chase = !sus && !g.playerCar && g.wanted.stars > 0 && pc.state === 'walk' && g.state === 'play';
       let tx, tz, sp = ch.brain.speed; const wish = _w.set(0, 0, 0); ch.aimPose = false;
-      if (chase) {
+      if (sus) { // running down an NPC suspect: shoot if they're armed and shooting, otherwise tackle and cuff
+        const dx = sus.pos.x - ch.pos.x, dz = sus.pos.z - ch.pos.z; const d = Math.hypot(dx, dz);
+        const armed = sus.armed && (sus.brain.mode === 'ambush' || sus.brain.mode === 'shootback');
+        if (armed && d < 18 && W.raycast(ch.pos.x, 1.45, ch.pos.z, sus.pos.x, 1.3, sus.pos.z) >= 1) {
+          if (!ch.gun) { ch.gun = g.weapons.takeGun(); if (!ch.handM) ch.handM = new THREE.Matrix4(); }
+          ch.faceToward(dx, dz, dt, 14); ch.aimPose = true; ch.aimPitch = 0; ch.twoHand = false; ch.shootT = (ch.shootT ?? 0.7) - dt;
+          if (ch.shootT <= 0) { ch.shootT = 0.8 + Math.random() * 0.6; g.weapons.npcShootAt(g.weapons.muzzlePos(ch, ch.gun), sus, 0.45, 26); }
+        } else {
+          if (d > 0.9) { wish.set(dx / d * 5.2, 0, dz / d * 5.2); ch.faceToward(dx, dz, dt, 12); }
+          if (d < 1.4) { // busted
+            sus.brain.mode = 'surrender'; sus.surrender = true; sus.armed = false; sus.gun = null; sus.aimPose = false; sus.panic = 0; ch.target = null; ch.wave = 0.4;
+            if (Math.hypot(g.focus.x - sus.pos.x, g.focus.z - sus.pos.z) < 90) g.hud.help('~b~Police~w~ arrested the suspect.', 2.5);
+          }
+        }
+      } else if (chase) {
         const dx = pp.x - ch.pos.x, dz = pp.z - ch.pos.z; const d = Math.hypot(dx, dz);
         const shooting = g.wanted.stars >= 3 || ch.aggro;
         if (shooting) {

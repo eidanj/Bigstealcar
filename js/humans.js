@@ -142,6 +142,13 @@ export class Character {
           if (d > 1e-5) { p.x += dx / d * (r - d); p.z += dz / d * (r - d); const vn = this.vel.x * dx / d + this.vel.z * dz / d; if (vn < 0) { this.vel.x -= vn * dx / d; this.vel.z -= vn * dz / d; } }
           else { const o = [p.x - c.x0, c.x1 - p.x, p.z - c.z0, c.z1 - p.z]; const m = Math.min(...o); const i = o.indexOf(m); if (i === 0) p.x = c.x0 - r; else if (i === 1) p.x = c.x1 + r; else if (i === 2) p.z = c.z0 - r; else p.z = c.z1 + r; }
         }
+      } else if (c.k === 2) { // convex building footprint
+        const pd = world.polyDepth(c, p.x, p.z);
+        if (pd.depth > 0) { p.x += pd.nx * (pd.depth + r); p.z += pd.nz * (pd.depth + r); const vn = this.vel.x * pd.nx + this.vel.z * pd.nz; if (vn < 0) { this.vel.x -= vn * pd.nx; this.vel.z -= vn * pd.nz; } }
+        else if (pd.depth > -r) {
+          const [qx, qz] = world.polyClosest(c, p.x, p.z); let dx = p.x - qx, dz = p.z - qz; const d = Math.hypot(dx, dz);
+          if (d < r && d > 1e-5) { dx /= d; dz /= d; p.x += dx * (r - d); p.z += dz * (r - d); const vn = this.vel.x * dx + this.vel.z * dz; if (vn < 0) { this.vel.x -= vn * dx; this.vel.z -= vn * dz; } }
+        }
       } else {
         const dx = p.x - c.x, dz = p.z - c.z; const d = Math.hypot(dx, dz); const R = r + c.r;
         if (d < R && d > 1e-5) { p.x += dx / d * (R - d); p.z += dz / d * (R - d); }
@@ -195,6 +202,8 @@ export class Character {
         torso: run * 0.22 + (this.dizzy > 0 ? Math.sin(this.phase * 0.7 + this.dizzy * 3) * 0.12 : 0), head: this.dizzy > 0 ? Math.sin(this.dizzy * 5) * 0.4 : 0, crouch: 0, legSpread: 0,
       };
       if (this.wave > 0) { this.wave -= dt; tgt.armR = 2.9; tgt.armRs = 0.3 + Math.sin(this.wave * 14) * 0.25; }
+      if (this.phone) { tgt.armR = 2.75; tgt.armRs = 0.62; tgt.head = 0.2; tgt.armL = 0.15; } // phone to the ear
+      if (this.surrender) { tgt.armR = tgt.armL = 3.0; tgt.armRs = tgt.armLs = 0.42; tgt.head = -0.1; } // hands up
       let rate = 14;
       if (this.aimPose) { // gun raised toward the crosshair
         tgt.armR = Math.PI / 2 + (this.aimPitch || 0); tgt.armRs = -0.06; tgt.torso = 0.04;

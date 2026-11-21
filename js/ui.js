@@ -11,7 +11,10 @@ const TIPS = [
   'Police lose track of you when you break line of sight. Your stars flash while they search.',
   'Press M to open the map, then click anywhere to set a GPS waypoint.',
   'Press Q in a car to flip through the radio stations.',
-  'Knocking over streetlights is great fun. The police disagree.',
+  'Knocking over streetlights is great fun. The police disagree, if anyone tells them.',
+  'Witnesses have to phone the cops. A yellow phone on the minimap means someone is calling. Stop them or get away.',
+  'Some people on the street are trouble. Punch the wrong guy and he punches back.',
+  'Use , and . for turn signals and / for hazard lights.',
   'Jump out of a moving car with F. It hurts a little.',
   'If your car lands on its roof, press R to flip it back over.',
   'Blast Barn gun stores sell weapons, ammo and body armor. Walk in and press F at the counter.',
@@ -21,7 +24,7 @@ const TIPS = [
 ];
 const CONTROLS = [
   ['On foot', [['W A S D', 'Move'], ['Shift', 'Sprint'], ['Space', 'Jump'], ['F / E', 'Enter or steal a car'], ['Mouse', 'Look around']]],
-  ['Driving', [['W / S', 'Accelerate / brake & reverse'], ['A / D', 'Steer'], ['Space', 'Handbrake drift'], ['F / E', 'Exit (bail out at speed)'], ['H', 'Horn'], ['Q', 'Radio station'], ['V', 'Camera view'], ['C', 'Look behind'], ['R', 'Flip car upright'], ['W S A D in the air', 'Flip and roll']]],
+  ['Driving', [['W / S', 'Accelerate / brake & reverse'], ['A / D', 'Steer'], ['Space', 'Handbrake drift'], ['F / E', 'Exit (bail out at speed)'], ['H', 'Horn'], [', / .', 'Left / right turn signal'], ['/', 'Hazard lights'], ['Q', 'Radio station'], ['V', 'Camera view'], ['C', 'Look behind'], ['R', 'Flip car upright'], ['W S A D in the air', 'Flip and roll']]],
   ['Weapons', [['Left mouse', 'Punch / shoot'], ['Right mouse', 'Aim (over the shoulder)'], ['1-6 / wheel', 'Switch weapon'], ['R', 'Reload'], ['F at a counter', 'Shop at Blast Barn']]],
   ['General', [['M', 'Map + waypoint'], ['Esc / P', 'Pause menu'], ['Click', 'Capture the mouse']]],
 ];

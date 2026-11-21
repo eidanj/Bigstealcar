@@ -105,6 +105,9 @@ class Game {
   }
 
   buildRenderer() {
+    // near-field cap for point/spot lights: a lamp a metre from a surface lights it like one ~2 m away instead of
+    // blowing it out to pure white (cop flashers, headlights nosed up to another car)
+    THREE.ShaderChunk.lights_pars_begin = THREE.ShaderChunk.lights_pars_begin.replace('max( pow( lightDistance, decayExponent ), 0.01 )', 'max( pow( lightDistance, decayExponent ), 3.0 )');
     const canvas = $('#game');
     const r = this.renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance', stencil: false });
     r.toneMapping = THREE.ACESFilmicToneMapping; r.toneMappingExposure = 0.7; r.outputColorSpace = THREE.SRGBColorSpace;
@@ -118,6 +121,8 @@ class Game {
     this.composer = new EffectComposer(this.renderer, rt);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.bloom = new UnrealBloomPass(new THREE.Vector2(innerWidth / 2, innerHeight / 2), 0.35, 0.55, 0.92); this.bloom.enabled = q !== 'low';
+    // bloom input is capped so a single scorching highlight (sun glint, a lamp in your face) can't flood the screen
+    { const hp = this.bloom.materialHighPassFilter; hp.fragmentShader = hp.fragmentShader.replace('vec4 texel = texture2D( tDiffuse, vUv );', 'vec4 texel = texture2D( tDiffuse, vUv );\n\t\t\ttexel.rgb *= min( 1.0, 3.5 / max( luminance( texel.rgb ), 1e-4 ) );'); hp.needsUpdate = true; }
     this.composer.addPass(this.bloom); this.composer.addPass(new OutputPass());
     this.grade = new ShaderPass(GradeShader); this.composer.addPass(this.grade);
     this.composer.setPixelRatio(this.renderer.getPixelRatio()); this.composer.setSize(innerWidth, innerHeight);
@@ -218,11 +223,12 @@ class Game {
       const ch = car.driverChar; car.driverChar = null;
       ch.state = 'walk'; ch.scale = 1; ch.pos.copy(car.pos).addScaledVector(car.left, car.ex + 1.1); ch.pos.y = this.world.ground(ch.pos.x, ch.pos.z); ch.yaw = Math.atan2(car.left.x, car.left.z);
       if (wasPolice) { ch.cop = true; ch.car = null; ch.brain = { mode: 'chase', speed: 4.9 }; this.peds.cops.push(ch); } else this.peds.adopt(ch, 5);
-      this.wanted.crime(wasPolice ? 70 : 32, wasPolice ? 'You stole a ~b~police car~w~!' : 'Car jacked! The ~r~cops~w~ are on the way.');
-    } else {
-      const witness = this.peds.list.some((h) => Math.hypot(h.pos.x - car.pos.x, h.pos.z - car.pos.z) < 30) || this.cars.some((c) => c.role === 'police' && Math.hypot(c.pos.x - car.pos.x, c.pos.z - car.pos.z) < 60);
-      if (wasPolice) this.wanted.crime(50, 'You stole a ~b~police car~w~!');
-      else if (witness && car !== this.lastCar && !car.owned) { this.wanted.crime(14, 'Someone saw you steal that car.'); if (Math.random() < 0.35) this.audio.stealAlarm(car.pos); }
+      if (wasPolice) this.wanted.crime(70, 'You stole a ~b~police car~w~!', { direct: true });
+      else this.wanted.crime(32, 'Car jacked in front of the ~b~police~w~!', { type: 'carjack', victim: ch, x: car.pos.x, z: car.pos.z });
+    } else if (car !== this.lastCar && !car.owned) {
+      const alarm = !wasPolice && Math.random() < 0.35; if (alarm) this.audio.stealAlarm(car.pos);
+      if (wasPolice) this.wanted.crime(50, 'You stole a ~b~police car~w~!', { type: 'copcar', x: car.pos.x, z: car.pos.z });
+      else this.wanted.crime(14, 'The ~b~police~w~ saw you steal that car.', { type: alarm ? 'carjack' : 'theft', x: car.pos.x, z: car.pos.z });
     }
     if (!car.owned) { this.stats.stolen++; car.owned = true; }
     if (car.ai) car.ai = null; car.siren = false;
@@ -233,7 +239,7 @@ class Game {
     if (this.tutorial === 1) { this.tutorial = 2; this.tutT = 1.5; }
   }
   exitCar(silent) {
-    const car = this.playerCar; if (!car) return; const ch = this.player.char; const sp = car.speed;
+    const car = this.playerCar; if (!car) return; const ch = this.player.char; const sp = car.speed; car.signal = null;
     const W = this.world; let side = 1; let door = car.pos.clone().addScaledVector(car.left, car.ex + 0.6).addScaledVector(car.fwd, car.type.prof.ws - 0.7);
     if (W.insideBuilding(door.x, door.z, 0.4) || this.cars.some((c) => c !== car && Math.hypot(c.pos.x - door.x, c.pos.z - door.z) < c.ex + 0.3)) { side = -1; door = car.pos.clone().addScaledVector(car.left, -(car.ex + 0.6)); }
     if (W.insideBuilding(door.x, door.z, 0.4)) door = car.pos.clone().add(new V3(0, car.type.H, 0));
@@ -252,6 +258,7 @@ class Game {
     const p = point.clone(), n = normal.clone(); const now = this.t;
     const isPlayer = car === this.playerCar || other === this.playerCar;
     if (kind === 'prop') return;
+    if (other && other.ai !== undefined && vn > 2.5) this.npcCollision(car, other);
     if (kind === 'ground') {
       if (vt > 4.5 && Math.random() < 0.3) { this.effects.sparksAt(p, 2, null, vt * 0.3, 0.8); if (isPlayer) this.scraping = 1; }
       if (vn > 7 && now - car.lastHit > 0.3) { car.lastHit = now; this.audio.crash(p, vn / 12); car.dent(p, n, (vn - 7) * 9); if (isPlayer) this.rig.shake(vn * 0.03); }
@@ -272,11 +279,18 @@ class Game {
       const victim = car === this.playerCar ? other : car;
       if (victim && victim.driver && now - (victim.hitByPlayer || -9) > 1.2) {
         victim.hitByPlayer = now;
-        if (victim.role === 'police') this.wanted.crime(vn > 4 ? 40 : 15, 'Ramming the ~b~police~w~? Bold move.');
-        else this.wanted.crime(vn > 5 ? 9 : 4, this.wanted.stars === 0 ? 'Reckless driving! Careful, the cops notice crashes.' : null);
+        if (victim.role === 'police') this.wanted.crime(vn > 4 ? 40 : 15, 'Ramming the ~b~police~w~? Bold move.', { direct: true });
+        else this.wanted.crime(vn > 5 ? 9 : 4, this.wanted.stars === 0 ? 'Reckless driving right in front of a ~b~cop~w~!' : null, { type: 'reckless', victim, x: p.x, z: p.z });
         if (victim.ai && victim.ai.honkT !== undefined) { victim.ai.honkT = 1; this.audio.honk(victim.pos, 0.8); }
       }
     }
+  }
+  // a civilian driver who smashes into a cruiser gets chased (unless that cop is already busy)
+  npcCollision(a, b) {
+    const cop = a.role === 'police' ? a : b.role === 'police' ? b : null; const civ = cop === a ? b : a;
+    if (!cop || !civ || civ.role !== 'traffic' || !civ.ai || civ.driver !== 'ai' || cop === this.playerCar || !cop.ai || cop.dead) return;
+    if (cop.ai.suspect || (this.wanted.stars > 0 && !cop.ai.traffic)) return;
+    if (cop.ai.setSuspect({ car: civ })) { civ.ai.flee(); if (Math.hypot(cop.pos.x - this.focus.x, cop.pos.z - this.focus.z) < 110) this.hud.help('A driver smashed into a ~b~cruiser~w~ and took off. ~b~Police pursuit!', 3); }
   }
   onPropBreak(rec, speed) {
     const p = new V3(rec.x, rec.y + 0.5, rec.z);
@@ -285,8 +299,8 @@ class Game {
     const near = this.playerCar && Math.hypot(this.playerCar.pos.x - rec.x, this.playerCar.pos.z - rec.z) < 8;
     if (near) {
       this.rig.shake(0.15);
-      if (rec.pole) { this.stats.lights++; this.wanted.crime(10, this.wanted.stars === 0 ? 'Flattening ~y~streetlights~w~ is vandalism. One star!' : null); }
-      else this.wanted.crime(rec.kind === 'hydrant' ? 4 : 1);
+      if (rec.pole) { this.stats.lights++; this.wanted.crime(10, this.wanted.stars === 0 ? 'A ~b~cop~w~ watched you flatten that streetlight!' : null, { type: 'vandal', x: rec.x, z: rec.z }); }
+      else this.wanted.crime(rec.kind === 'hydrant' ? 4 : 1, null, { type: 'vandal', x: rec.x, z: rec.z });
     }
     void speed;
   }
@@ -295,7 +309,7 @@ class Game {
     if (ch === this.player.char) { this.player.hurt((rel - 2.5) * 6.5, 'hit'); return; }
     if (car === this.playerCar) {
       this.stats.knocked++; this.rig.shake(0.12);
-      this.wanted.crime(ch.cop ? 45 : 20, ch.cop ? 'You flattened a ~b~cop~w~. That is a lot of paperwork.' : 'Watch the sidewalk! The ~r~cops~w~ saw that.');
+      this.wanted.crime(ch.cop ? 45 : 20, ch.cop ? 'You flattened a ~b~cop~w~. That is a lot of paperwork.' : 'Watch the sidewalk! The ~r~cops~w~ saw that.', { direct: ch.cop, type: 'hitped', x: ch.pos.x, z: ch.pos.z });
       for (const h of this.peds.list) if (h !== ch && Math.hypot(h.pos.x - ch.pos.x, h.pos.z - ch.pos.z) < 18) { h.panic = 3; h.brain.flee = [h.pos.x - ch.pos.x, h.pos.z - ch.pos.z]; }
     }
   }
@@ -389,7 +403,13 @@ class Game {
     if (this.playerCar) { this.player.char.updateSeat(this.playerCar); }
     // lights: player headlight + police flashers
     const hl = this.headlight; const pc = this.playerCar;
-    if (pc && night > 0.25) { hl.intensity = 420 * night; hl.position.copy(pc.pos).addScaledVector(pc.fwd, pc.ez - 0.2).addScaledVector(pc.up, 0.25); hl.target.position.copy(pc.pos).addScaledVector(pc.fwd, 30).addScaledVector(pc.up, -2.5); hl.target.updateMatrixWorld(); } else hl.intensity = 0;
+    if (pc && night > 0.25) {
+      hl.position.copy(pc.pos).addScaledVector(pc.fwd, pc.ez - 0.2).addScaledVector(pc.up, 0.25); hl.target.position.copy(pc.pos).addScaledVector(pc.fwd, 30).addScaledVector(pc.up, -2.5); hl.target.updateMatrixWorld();
+      // keep the beam from glaring off anything nosed right up to the bumper: cap the light that reaches it
+      let near = 30 * this.world.raycast(hl.position.x, hl.position.y, hl.position.z, hl.position.x + pc.fwd.x * 30, hl.position.y, hl.position.z + pc.fwd.z * 30, 0.6);
+      for (const c of this.cars) { if (c === pc) continue; const dx = c.pos.x - hl.position.x, dz = c.pos.z - hl.position.z; const f = dx * pc.fwd.x + dz * pc.fwd.z; if (f < 0 || f > 30) continue; const l = Math.abs(dx * pc.left.x + dz * pc.left.z); if (l < c.ex + 1.5 + f * 0.25) near = Math.min(near, Math.max(0.5, f - c.ez)); }
+      const want = 420 * night; this.hlI = damp(this.hlI ?? want, Math.min(want, 2.2 * Math.max(1, near) * Math.max(1, near)), 10, dt); hl.intensity = this.hlI;
+    } else hl.intensity = 0;
     if (nearestCop && sirenD < 70) { const ph = Math.floor(this.t * 7) % 4; const p = nearestCop.pos.clone().addScaledVector(nearestCop.up, nearestCop.type.H - nearestCop.comH + 0.4); this.copLights[0].position.copy(p).addScaledVector(nearestCop.left, 0.5); this.copLights[1].position.copy(p).addScaledVector(nearestCop.left, -0.5); this.copLights[0].intensity = ph < 2 ? 50 + night * 150 : 0; this.copLights[1].intensity = ph >= 2 ? 50 + night * 150 : 0; } else for (const l of this.copLights) l.intensity = 0;
     // humans
     for (const ch of this.peds.list) this.humans.draw(ch); for (const ch of this.peds.cops) this.humans.draw(ch);
@@ -437,6 +457,7 @@ class Game {
       p.driveInput(dt, inp, car);
       if (inp.hit('KeyF', 'KeyE') && this.lockControls <= 0) { this.exitCar(); return; }
       if (inp.hit('KeyQ')) this.hud.radio(this.audio.nextStation());
+      if (inp.hit('Comma')) car.setSignal('L'); if (inp.hit('Period')) car.setSignal('R'); if (inp.hit('Slash')) car.hazard = !car.hazard;
       if (inp.hit('KeyR') && (car.up.y < 0.6 || car.speed < 3)) car.flip();
       if (car.upsideT > 1.5) this.hud.help('Press [R] to flip your car back over.', 0.3);
       if (inp.down('KeyH')) for (const h of this.peds.list) if (h.state === 'walk' && Math.hypot(h.pos.x - car.pos.x, h.pos.z - car.pos.z) < 14 && Math.random() < 0.02) { if (Math.random() < 0.5) h.wave = 1.2; else h.panic = 1.2; }
@@ -448,7 +469,7 @@ class Game {
       else if (this.tutorial === 1) { if (!this.playerCar) { this.hud.help('Press [F] next to any car to steal it.', 4); this.tutT = 14; } }
       else if (this.tutorial <= 5) {
         const tips = ['[W] [S] drive and reverse, [A] [D] steer, hold [Space] to drift. [H] horn, [V] camera, [Q] radio.',
-          'Hit ~y~ramps~w~ and pull long ~b~drifts~w~ for cash. Smash into traffic or streetlights and the ~r~cops~w~ come running.',
+          'Hit ~y~ramps~w~ and pull long ~b~drifts~w~ for cash. Cause trouble and a witness might ~y~call the cops~w~. Knock them out before they finish the call!',
           'Drive into a glowing marker to start a mission: ~y~R~w~ races, ~g~S~w~ stunt jumps, ~r~G~w~ getaways. Press [M] for the map.',
           'Need firepower? Walk into a ~y~Blast Barn~w~ gun store (orange ~y~A~w~ on the map). Left click punches or shoots, right click aims.'];
         this.hud.help(tips[this.tutorial - 2], 7); this.tutorial++; this.tutT = 9;

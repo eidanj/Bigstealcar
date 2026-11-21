@@ -1,7 +1,7 @@
 // Big Steal Car — rigid-body raycast vehicle: suspension, tyre slip model, gearbox, collisions and damage.
 import * as THREE from 'three';
 import { CAR_TYPES } from './config.js';
-import { clamp, lerp, smooth } from './util.js';
+import { clamp, lerp, smooth, wrapAngle } from './util.js';
 
 const V3 = THREE.Vector3; const G = 9.81;
 const _a = new V3(), _b = new V3(), _c = new V3(), _d = new V3(), _e = new V3(), _f = new V3(), _r = new V3(), _n = new V3(), _t = new V3(), _vp = new V3();
@@ -228,6 +228,20 @@ export class Vehicle {
         } else { // deepest box corner
           let mx = -1e9; for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { const qx = bx + hx * sx, qz = bz + hz * sz; const dd = qx * nx + qz * nz; if (dd > mx) { mx = dd; px = qx; pz = qz; } }
         }
+      } else if (col.k === 2) { // convex polygon footprint: SAT over the car's two axes + every polygon edge normal
+        let best = 1e9, bnx = 0, bnz = 0, carAxis = false, sep = false; const P2 = col.pts;
+        const test = (ax, az, ca) => {
+          const rc = ex * Math.abs(Lx * ax + Lz * az) + ez * Math.abs(Fx * ax + Fz * az); const cc = c.x * ax + c.z * az;
+          let mn = 1e9, mx = -1e9; for (const q of P2) { const d = q[0] * ax + q[1] * az; if (d < mn) mn = d; if (d > mx) mx = d; }
+          const o = Math.min(cc + rc - mn, mx - (cc - rc)); if (o <= 0) { sep = true; return; }
+          if (o < best) { best = o; const s = cc - (mn + mx) / 2 < 0 ? -1 : 1; bnx = ax * s; bnz = az * s; carAxis = ca; }
+        };
+        test(Fx, Fz, true); if (!sep) test(Lx, Lz, true);
+        for (let i = 0; i < col.nrm.length && !sep; i++) test(col.nrm[i][0], col.nrm[i][1], false);
+        if (sep) continue;
+        nx = bnx; nz = bnz; depth = best;
+        if (!carAxis) { let mn = 1e9; for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]]) { const qx = c.x + Lx * ex * sx + Fx * ez * sz, qz = c.z + Lz * ex * sx + Fz * ez * sz; const dd = qx * nx + qz * nz; if (dd < mn) { mn = dd; px = qx; pz = qz; } } }
+        else { let mx = -1e9; for (const q of P2) { const dd = q[0] * nx + q[1] * nz; if (dd > mx) { mx = dd; px = q[0]; pz = q[1]; } } }
       } else {
         const ox = col.x - c.x, oz = col.z - c.z; const lx = ox * Lx + oz * Lz, lz = ox * Fx + oz * Fz;
         const qx = clamp(lx, -ex, ex), qz = clamp(lz, -ez, ez); let ddx = lx - qx, ddz = lz - qz; let d = Math.hypot(ddx, ddz);
@@ -270,12 +284,36 @@ export class Vehicle {
       _m2.compose(_a, _q1, _s.set(t.wheelW, t.wheelR, t.wheelR)); _m3.multiplyMatrices(_m1, _m2);
       this.game.wheels.set(w.inst, _m3);
     }
-    const braking = this.driver && (this.ctrl.brake > 0.1 && this.vFwd > 0.5 || this.ctrl.handbrake);
-    this.model.tailMat.emissiveIntensity = (braking ? 3.2 : 0.35) + this.game.night * 0.9;
+    this.updateLamps(dt);
     if (this.model.barR) {
-      if (this.siren) { this.sirenT += dt; const ph = Math.floor(this.sirenT * 7) % 4; this.model.barR.color.setRGB(ph < 2 ? 8 : 0.2, 0, 0); this.model.barB.color.setRGB(0, 0.1, ph >= 2 ? 9 : 0.25); }
+      if (this.siren) { this.sirenT += dt; const ph = Math.floor(this.sirenT * 7) % 4; this.model.barR.color.setRGB(ph < 2 ? 5 : 0.2, 0, 0); this.model.barB.color.setRGB(0, 0.1, ph >= 2 ? 6 : 0.25); }
       else { this.model.barR.color.setRGB(0.25, 0, 0); this.model.barB.color.setRGB(0, 0, 0.3); }
     }
+  }
+  // indicators: 'L' | 'R' | null, hazards separate. Player signals cancel themselves once a turn is complete.
+  setSignal(dir) { this.signal = this.signal === dir ? null : dir; this.sigYaw = this.yaw; this.sigTurned = false; }
+  updateLamps(dt) {
+    const g = this.game, U = this.model.lamps, c = this.ctrl, n = g.night;
+    const live = !!this.driver && !this.dead; const blink = (g.t * 1.55) % 1 < 0.55;
+    if (this.signal && this.driver === 'player') { // self-cancel after the corner, like a real stalk
+      const turned = wrapAngle(this.yaw - this.sigYaw) * (this.signal === 'L' ? 1 : -1);
+      if (turned > 0.9) this.sigTurned = true;
+      if (this.sigTurned && Math.abs(c.steer) < 0.15) this.signal = null;
+      if (turned < -0.6) this.sigYaw = this.yaw; // drifting the other way: keep blinking
+    }
+    const haz = !!this.hazard && !this.dead;
+    const L = blink && (haz || (live && this.signal === 'L')), Rr = blink && (haz || (live && this.signal === 'R'));
+    const braking = live && (c.brake > 0.1 && this.vFwd > 0.5 || c.handbrake);
+    const rev = live && this.vFwd < -0.3;
+    const head = live ? 0.05 + smooth(0.15, 0.6, n) * 2.2 : 0;
+    U[0].set(1, 0.95, 0.86).multiplyScalar(head);
+    U[1].set(0.9, 0.95, 1).multiplyScalar(live ? 1.25 + n * 0.45 : 0);
+    const amb = 3.4; U[2].set(1, 0.42, 0.03).multiplyScalar(L ? amb : 0); U[3].set(1, 0.42, 0.03).multiplyScalar(Rr ? amb : 0);
+    U[5].copy(U[2]); U[6].copy(U[3]);
+    U[4].set(1, 0.035, 0.025).multiplyScalar(braking ? 3.4 : live ? 0.22 + smooth(0.15, 0.6, n) * 0.75 : 0);
+    U[7].set(1, 1, 1).multiplyScalar(rev ? 2.6 : 0);
+    if (this.driver === 'player') { const on = !!(L || Rr); if (on !== this._blinkOn) { this._blinkOn = on; g.audio.tick && g.audio.tick(on); } }
+    void dt;
   }
   damage(amount, lx, ly, lz, dx, dy, dz) {
     if (amount <= 0) return;
