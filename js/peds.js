@@ -86,7 +86,7 @@ export class Peds {
     if (ch.panic > 0) {
       ch.panic -= dt; sp = 5.2;
       if (B.flee) wish.set(B.flee[0], 0, B.flee[1]);
-      else { const [tx, tz] = this.corner(B.ring, B.target % B.ring.pts.length); wish.set(tx - ch.pos.x, 0, tz - ch.pos.z); }
+      else { const [tx, tz] = this.corner(B.ring, (B.target | 0) % B.ring.pts.length); wish.set(tx - ch.pos.x, 0, tz - ch.pos.z); }
       if (ch.panic <= 0) { B.mode = 'return'; B.flee = null; }
     } else if (B.mode === 'walk' || B.mode === 'return') {
       const n = B.ring.pts.length;
@@ -127,7 +127,7 @@ export class Peds {
         for (const car of g.cars) {
           if (car.role !== 'police' || car.dead || !car.driver || car === g.playerCar || (car.ai && car.ai.suspect)) continue;
           const d = Math.hypot(car.pos.x - ch.pos.x, car.pos.z - ch.pos.z);
-          if (d > 6 && d < 26 && Math.random() < 0.2 && W.raycast(ch.pos.x, 1.4, ch.pos.z, car.pos.x, 1.1, car.pos.z) >= 1) { B.mode = 'ambush'; B.target = car; B.shots = 3 + Math.floor(Math.random() * 3); B.shootT = 0.7; ch.armed = true; break; }
+          if (d > 6 && d < 26 && Math.random() < 0.2 && W.raycast(ch.pos.x, 1.4, ch.pos.z, car.pos.x, 1.1, car.pos.z) >= 1) { B.mode = 'ambush'; B.prey = car; B.shots = 3 + Math.floor(Math.random() * 3); B.shootT = 0.7; ch.armed = true; break; }
         }
       }
       return false;
@@ -152,7 +152,7 @@ export class Peds {
       if (B.shootT <= 0 && W.raycast(ch.pos.x, 1.45, ch.pos.z, target.x, 1.2, target.z) >= 1) { B.shootT = 0.9 + Math.random() * 0.6; g.weapons.npcShoot(g.weapons.muzzlePos(ch, ch.gun), clamp(0.4 - d * 0.015, 0.1, 0.4), 6); }
       this.copsNotice(ch, dt);
     } else if (B.mode === 'ambush') { // taking potshots at a cruiser, then legging it
-      const car = B.target;
+      const car = B.prey;
       if (!car || !g.cars.includes(car) || car.dead) { B.mode = 'flee'; B.t = 0; return true; }
       gun(); const dx = car.pos.x - ch.pos.x, dz = car.pos.z - ch.pos.z; ch.faceToward(dx, dz, dt, 14); ch.aimPose = true; ch.aimPitch = -0.08; ch.twoHand = false;
       B.shootT -= dt;
@@ -224,7 +224,8 @@ export class Peds {
   // ---------------- officers on foot ----------------
   spawnCop(car, target = null) {
     const g = this.game; const look = { skin: R.pick(SKIN), hair: 0x101830, shirt: 0x1b2a4a, pants: 0x121a2e, shoes: 0x111111, sleeve: 0x1b2a4a };
-    const x = car.pos.x + car.left.x * (car.ex + 0.6), z = car.pos.z + car.left.z * (car.ex + 0.6);
+    const side = target ? Math.sign((target.pos.x - car.pos.x) * car.left.x + (target.pos.z - car.pos.z) * car.left.z) || 1 : 1; // get out on the suspect's side
+    const x = car.pos.x + car.left.x * side * (car.ex + 0.6), z = car.pos.z + car.left.z * side * (car.ex + 0.6);
     const ch = new Character(g, look, x, z, car.yaw); if (ch.slot == null) { ch.dispose(); return null; }
     ch.cop = true; ch.car = car; ch.health = 90; ch.brain = { mode: 'chase', speed: 4.9 }; ch.target = target; this.cops.push(ch); car.officer = ch; return ch;
   }
@@ -233,22 +234,26 @@ export class Peds {
     for (const ch of [...this.cops]) {
       if (ch.state !== 'walk') { ch.aimPose = false; ch.physicsRagdoll(dt); ch.animate(dt); this.carHits(ch); continue; }
       const car = ch.car && g.cars.includes(ch.car) && !ch.car.dead ? ch.car : null; const pc = g.player.char; const pp = pc.pos;
-      const sus = ch.target && this.list.includes(ch.target) && ch.target.state === 'walk' && ch.target.brain.mode !== 'surrender' ? ch.target : null;
+      // (a 911 suspect with their hands up, or flat on the ground, still has to be walked over to and cuffed)
+      const T = ch.target; const sus = T && this.list.includes(T) && !T.cuffed && !T.detained && (T.state === 'walk' ? T.brain.mode !== 'surrender' || T.suspect : !!T.suspect) ? T : null;
       if (ch.target && !sus) ch.target = null;
       const chase = !sus && !g.playerCar && g.wanted.stars > 0 && pc.state === 'walk' && g.state === 'play';
       let tx, tz, sp = ch.brain.speed; const wish = _w.set(0, 0, 0); ch.aimPose = false;
+      if (sus || chase) ch.backT = 0;
       if (sus) { // running down an NPC suspect: shoot if they're armed and shooting, otherwise tackle and cuff
         const dx = sus.pos.x - ch.pos.x, dz = sus.pos.z - ch.pos.z; const d = Math.hypot(dx, dz);
-        const armed = sus.armed && (sus.brain.mode === 'ambush' || sus.brain.mode === 'shootback');
+        const armed = sus.state === 'walk' && sus.armed && (sus.brain.mode === 'ambush' || sus.brain.mode === 'shootback');
         if (armed && d < 18 && W.raycast(ch.pos.x, 1.45, ch.pos.z, sus.pos.x, 1.3, sus.pos.z) >= 1) {
           if (!ch.gun) { ch.gun = g.weapons.takeGun(); if (!ch.handM) ch.handM = new THREE.Matrix4(); }
           ch.faceToward(dx, dz, dt, 14); ch.aimPose = true; ch.aimPitch = 0; ch.twoHand = false; ch.shootT = (ch.shootT ?? 0.7) - dt;
           if (ch.shootT <= 0) { ch.shootT = 0.8 + Math.random() * 0.6; g.weapons.npcShootAt(g.weapons.muzzlePos(ch, ch.gun), sus, 0.45, 26); }
         } else {
-          if (d > 0.9) { wish.set(dx / d * 5.2, 0, dz / d * 5.2); ch.faceToward(dx, dz, dt, 12); }
+          const run = sus.suspect ? 6.1 : 5.2; // a touch quicker than a fleeing suspect, or foot chases never end
+          if (sus.suspect && d > 32 && sus.state === 'walk') { ch.target = null; continue; } // they've pulled away: back to the cruiser to give chase in that
+          if (d > 0.9) { const [wx, wz] = this.aroundCars(ch, dx / d, dz / d); wish.set(wx * run, 0, wz * run); ch.faceToward(wish.x, wish.z, dt, 12); }
           if (d < 1.4) { // busted
-            sus.brain.mode = 'surrender'; sus.surrender = true; sus.armed = false; sus.gun = null; sus.aimPose = false; sus.panic = 0; ch.target = null; ch.wave = 0.4;
-            if (Math.hypot(g.focus.x - sus.pos.x, g.focus.z - sus.pos.z) < 90) g.hud.help('~b~Police~w~ arrested the suspect.', 2.5);
+            sus.brain.mode = 'surrender'; sus.surrender = true; sus.armed = false; sus.gun = null; sus.aimPose = false; sus.panic = 0; sus.detained = true; ch.target = null; ch.wave = 0.4;
+            if (!sus.suspect && Math.hypot(g.focus.x - sus.pos.x, g.focus.z - sus.pos.z) < 90) g.hud.help('~b~Police~w~ arrested the suspect.', 2.5);
           }
         }
       } else if (chase) {
@@ -268,12 +273,23 @@ export class Peds {
         }
       } else if (car) { // head back to the cruiser
         tx = car.pos.x + car.left.x * (car.ex + 0.5); tz = car.pos.z + car.left.z * (car.ex + 0.5); const dx = tx - ch.pos.x, dz = tz - ch.pos.z; const d = Math.hypot(dx, dz);
-        if (d < 1.2) { this.removeCop(ch); continue; }
-        wish.set(dx / d * sp, 0, dz / d * sp); ch.faceToward(dx, dz, dt, 12);
+        const dc = Math.hypot(car.pos.x - ch.pos.x, car.pos.z - ch.pos.z); ch.backT = (ch.backT || 0) + dt;
+        if (d < 1.2 || dc < Math.max(car.ex, car.ez) + 0.9 || (ch.backT > 6 && dc < 9)) { this.removeCop(ch); continue; } // back at the car (either side; or near enough and snagged on something)
+        const [wx, wz] = this.aroundCars(ch, dx / d, dz / d); wish.set(wx * sp, 0, wz * sp); ch.faceToward(wish.x, wish.z, dt, 12);
       } else { ch.lostT = (ch.lostT || 0) + dt; if (ch.lostT > 25 || !g.inView(ch.pos.x, ch.pos.z, 2)) { this.removeCop(ch); continue; } }
       ch.move(dt, wish, false, 14); ch.animate(dt); this.carHits(ch);
       if (Math.hypot(ch.pos.x - g.focus.x, ch.pos.z - g.focus.z) > 200) this.removeCop(ch);
     }
+  }
+  // walking toward something with a car in the way: sidestep round it instead of pushing into the bodywork
+  aroundCars(ch, ux, uz) {
+    for (const car of this.game.cars) {
+      const px = ch.pos.x + ux * 0.9 - car.pos.x, pz = ch.pos.z + uz * 0.9 - car.pos.z; if (px * px + pz * pz > 36) continue;
+      if (Math.abs(px * car.left.x + pz * car.left.z) > car.ex + 0.4 || Math.abs(px * car.fwd.x + pz * car.fwd.z) > car.ez + 0.4) continue;
+      let sx = -uz, sz = ux; if (sx * (car.pos.x - ch.pos.x) + sz * (car.pos.z - ch.pos.z) > 0) { sx = -sx; sz = -sz; }
+      const l = Math.hypot(sx + ux * 0.25, sz + uz * 0.25) || 1; return [(sx + ux * 0.25) / l, (sz + uz * 0.25) / l];
+    }
+    return [ux, uz];
   }
   removeCop(ch) { const i = this.cops.indexOf(ch); if (i >= 0) this.cops.splice(i, 1); ch.gun = null; if (ch.car && ch.car.officer === ch) ch.car.officer = null; ch.dispose(); }
   clear() { for (const ch of [...this.list]) this.remove(ch); for (const c of [...this.cops]) this.removeCop(c); }

@@ -233,8 +233,8 @@ class Game {
     let t = type || pickWeighted(PARKED_MIX); if (!type && slot.lot) for (let k = 0; k < 6 && CAR_TYPES[t].L > 5.3; k++) t = pickWeighted(PARKED_MIX); /* lot bays are short */ const car = new Vehicle(this, t, color ?? R.pick(PAINT), slot.x, slot.z, slot.yaw + (Math.random() < 0.06 ? Math.PI : 0));
     car.role = 'parked'; car.slot = slot; slot.used = true; car.sleeping = false; this.cars.push(car); return car;
   }
-  spawnPolice(sp) {
-    const f = this.focus; const toward = Math.atan2(f.x - sp.x, f.z - sp.z);
+  spawnPolice(sp, f = this.focus) {
+    const toward = Math.atan2(f.x - sp.x, f.z - sp.z);
     const car = new Vehicle(this, 'police', 0, sp.x, sp.z, Math.abs(Math.atan2(Math.sin(toward - sp.yaw), Math.cos(toward - sp.yaw))) < 1.6 ? sp.yaw : sp.yaw + Math.PI);
     car.role = 'police'; car.driver = 'ai'; car.ai = new PoliceDriver(this, car); car.siren = true; car.vel.copy(car.fwd).multiplyScalar(14);
     const ch = new Character(this, { skin: R.pick([0xf1c27d, 0xc68642, 0x8d5524, 0xffdbac]), hair: 0x101830, shirt: 0x1b2a4a, pants: 0x121a2e, shoes: 0x111111 }, sp.x, sp.z, 0);
@@ -290,7 +290,7 @@ class Game {
   // ======================= events =======================
   onImpact(car, other, impulse, point, normal, kind, vn = 0, vt = 0) {
     const p = point.clone(), n = normal.clone(); const now = this.t;
-    const isPlayer = car === this.playerCar || other === this.playerCar;
+    const isPlayer = !!this.playerCar && (car === this.playerCar || other === this.playerCar); // (on foot, playerCar is null — and so is `other` for a wall)
     if (kind === 'prop') return;
     if (other && other.ai !== undefined && vn > 2.5) this.npcCollision(car, other);
     if (kind === 'ground') {
@@ -318,6 +318,7 @@ class Game {
       const pre = (c) => c.vel.dot(n) - (c === car ? 1 : -1) * impulse * c.invMass;
       const pc = this.playerCar, sgn = car === pc ? -1 : 1; const mine = sgn * pre(pc), theirs = victim ? -sgn * pre(victim) : 0;
       const atFault = mine > 2 && mine >= theirs * 0.8;
+      if (victim && !atFault && theirs > 2) pc.shovedT = now; // knocked into whatever's next to us: not the player's doing either
       if (victim && victim.driver && atFault && now - (victim.hitByPlayer || -9) > 1.2) {
         victim.hitByPlayer = now;
         if (victim.role === 'police') this.wanted.crime(vn > 4 ? 40 : 15, 'Ramming the ~b~police~w~? Bold move.', { direct: true, type: 'rampolice', victim });
@@ -348,7 +349,7 @@ class Game {
   onPersonHit(ch, car, rel) {
     this.audio.thud(ch.pos, clamp(rel / 10, 0.3, 1.2));
     if (ch === this.player.char) { this.player.hurt((rel - 2.5) * 6.5, 'hit'); return; }
-    if (car === this.playerCar) {
+    if (car === this.playerCar && this.t - (car.shovedT || -9) > 1.5) {
       this.stats.knocked++; this.rig.shake(0.12);
       this.wanted.crime(ch.cop ? 45 : 20, ch.cop ? 'You flattened a ~b~cop~w~. That is a lot of paperwork.' : 'Watch the sidewalk! The ~r~cops~w~ saw that.', { direct: ch.cop, type: 'hitped', x: ch.pos.x, z: ch.pos.z });
       for (const h of this.peds.list) if (h !== ch && Math.hypot(h.pos.x - ch.pos.x, h.pos.z - ch.pos.z) < 18) { h.panic = 3; h.brain.flee = [h.pos.x - ch.pos.x, h.pos.z - ch.pos.z]; }

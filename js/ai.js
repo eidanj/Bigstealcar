@@ -42,6 +42,11 @@ function pursue(car, tx, tz) {
   if (lz < 0) delta = Math.sign(lx || 1) * 1.0; // target behind: full lock
   return clamp(-delta / Math.max(0.12, car.maxSteer()), -1, 1);
 }
+// nearest point on a street to (x, z): every grid line is a road
+function roadSnap(x, z) {
+  const gx = clamp(Math.round((x + HALF) / P), 0, NB) * P - HALF, gz = clamp(Math.round((z + HALF) / P), 0, NB) * P - HALF;
+  return Math.abs(gx - x) < Math.abs(gz - z) ? [gx, z] : [x, gz];
+}
 function speedCtl(car, target) {
   const v = car.vFwd; const err = target - v; const c = car.ctrl; c.noReverse = true;
   c.throttle = clamp(err * 0.4, 0, 1); c.brake = clamp(-err * 0.35, 0, 1);
@@ -97,7 +102,9 @@ export class TrafficDriver {
     let target = this.cruise * (car.type.cls === 'Van' ? 0.85 : car.type.cls === 'Truck' ? 0.72 : 1);
     if (this.path.flags[this.path.seg + 1] || this.path.flags[this.path.seg + 2]) target = Math.min(target, 7.5);
     // spooked by gunfire: floor it and ignore the lights for a while
-    if (this.panicT > 0) { this.panicT -= dt; target = this.cruise * (this.fleeing ? 2.1 : 1.75); if (Math.random() < dt * 0.6) g.audio.honk(car.pos, 0.6); }
+    if (this.panicT > 0) { this.panicT -= dt; target = this.cruise * (this.fleeing ? 2.1 : 1.75); if (Math.random() < dt * 0.6) g.audio.honk(car.pos, 0.6);
+      // running from the cops: flat out on the straights, but brake for corners rather than barrel-rolling through them
+      if (this.fleeing) { target = Math.min(target, 28); for (let i = this.path.seg + 1; i < this.path.pts.length - 1 && i <= this.path.seg + 3; i++) if (this.path.flags[i]) { target = Math.min(target, Math.sqrt(13 * 13 + 2 * 7 * Math.max(0, this.path.remainingTo(i, x, z) - 4))); break; } } }
     // a siren coming up behind: slow down and move over
     if (!this.fleeing) { this.yieldT = Math.max(0, (this.yieldT || 0) - dt); for (const o of g.cars) { if (!o.siren || o === car || !(o.role === 'police' || o === g.playerCar) || o.speed < 4) continue; const dx = o.pos.x - x, dz = o.pos.z - z; const f = dx * car.fwd.x + dz * car.fwd.z; if (f < -2 && f > -38 && Math.abs(dx * car.left.x + dz * car.left.z) < 5 && o.vel.dot(car.fwd) > 2) this.yieldT = 2.2; }
       if (this.yieldT > 0) target = Math.min(target, 3.5); }
@@ -156,7 +163,7 @@ export class TrafficDriver {
 // troublemaker who shot at one). With nothing to do it just patrols like traffic.
 export class PoliceDriver {
   constructor(game, car) { this.game = game; this.car = car; this.path = new Path(); this.repath = 0; this.stuckT = 0; this.reverseT = 0; this.offset = (Math.random() - 0.5) * 6; this.traffic = null; this.leaveT = 0; this.boost = 1; this.suspect = null; this.searchPt = null; }
-  buildPath(tgt) {
+  buildPath(tgt, snap) {
     const W = this.game.world, car = this.car;
     // start from the intersection ahead of us (never one behind, or we'd U-turn back and forth)
     const k0 = Math.floor((car.pos.x + HALF) / P), l0 = Math.floor((car.pos.z + HALF) / P); let from = null, bs = 1e9;
@@ -173,13 +180,14 @@ export class PoliceDriver {
       else pts.push([x, z]);
       prev = [x, z]; prevN = nd;
     }
-    pts.push([tgt.x, tgt.z]); this.path.set(pts);
+    pts.push(snap ? roadSnap(tgt.x, tgt.z) : [tgt.x, tgt.z]); this.path.set(pts); // (someone on a sidewalk: stop on the street beside them, not in the building behind)
   }
-  setSuspect(s) { if (this.suspect && !this.suspect.done) return false; this.suspect = { ...s, t: 0, bustT: 0, doneT: 0, done: false }; this.traffic = null; this.car.siren = true; this.repath = 0; return true; }
+  // s: { car } or { ch }, plus for an on-duty player's 911 call { call, role: 'block' | 'tail' }
+  setSuspect(s, force) { if (!force && this.suspect && !this.suspect.done) return false; this.suspect = { ...s, t: 0, bustT: 0, doneT: 0, done: false }; this.traffic = null; this.car.siren = true; this.repath = 0; this.ahead = false; if (this.car.officer && s.ch) this.car.officer.target = s.ch; return true; }
   endSuspect() { this.suspect = null; }
   suspectState() {
     const s = this.suspect, g = this.game; if (!s) return null;
-    if (s.car) { const c = s.car; if (!g.cars.includes(c) || c === g.playerCar || c.dead) return null; return { x: c.pos.x, z: c.pos.z, vx: c.vel.x, vz: c.vel.z, lx: c.left.x, lz: c.left.z, onFoot: false, speed: c.speed }; }
+    if (s.car) { const c = s.car; if (!g.cars.includes(c) || c === g.playerCar || c.dead) return null; return { x: c.pos.x, z: c.pos.z, vx: c.vel.x, vz: c.vel.z, lx: c.left.x, lz: c.left.z, fx: c.fwd.x, fz: c.fwd.z, onFoot: false, speed: c.speed }; }
     const ch = s.ch; if (!g.peds.list.includes(ch)) return null; return { x: ch.pos.x, z: ch.pos.z, vx: ch.vel.x, vz: ch.vel.z, lx: 1, lz: 0, onFoot: true, speed: ch.speed, ch };
   }
   update(dt) {
@@ -192,6 +200,10 @@ export class PoliceDriver {
       else {
         s.t += dt; const d = Math.hypot(sus.x - car.pos.x, sus.z - car.pos.z);
         if (s.done) { s.doneT += dt; if (s.doneT > 6) { this.endSuspect(); sus = null; } }
+        else if (s.call) { // backing up the player on a 911 call: stay on it until the call is over (the job decides when a car is boxed in)
+          if (!g.police || g.police.call !== s.call || d > 420) { this.endSuspect(); sus = null; }
+          else if (sus.onFoot && (sus.ch.detained || sus.ch.cuffed)) s.done = true;
+        }
         else if (d > 170 || s.t > 150) { this.endSuspect(); sus = null; } // got away
         else if (!sus.onFoot && sus.speed < 1.5 && d < 9) { s.bustT += dt; if (s.bustT > 2.4) { s.done = true; if (s.car.ai) s.car.ai.busted = true; if (Math.hypot(g.focus.x - car.pos.x, g.focus.z - car.pos.z) < 90) g.hud.help('~b~Police~w~ pulled over a reckless driver.', 2.5); } }
         else if (sus.onFoot && (sus.ch.surrender || sus.ch.state === 'down')) s.done = true;
@@ -199,12 +211,23 @@ export class PoliceDriver {
       }
     }
     if (!tgt && WT.stars > 0) { tgt = WT.copTarget(); chasingPlayer = true; }
+    if (!tgt && car.officer && g.peds.cops.includes(car.officer)) { // wait for our officer to walk back
+      this.waitT = (this.waitT || 0) + dt; c.throttle = 0; c.brake = 1; c.steer = 0; car.siren = false; car.hazard = true;
+      if (this.waitT > 30 && !g.inView(car.officer.pos.x, car.officer.pos.z, 2)) { g.peds.removeCop(car.officer); this.waitT = 0; }
+      return;
+    }
+    this.waitT = 0;
     if (!tgt) { // patrol: drive around like normal traffic
       car.siren = false;
       if (!this.traffic) { const n = W.nearestNode(car.pos.x, car.pos.z); const nb = W.neighbors(...n)[0]; this.traffic = new TrafficDriver(g, car, n, nb, 0); this.traffic.reroute(); this.traffic.cruise = 11 + Math.random() * 2; }
       this.leaveT += dt; this.traffic.update(dt); car.siren = false; return;
     }
     this.traffic = null; car.siren = !(this.suspect && this.suspect.done);
+    // our officer is out chasing on foot: park up and wait (don't run them over)
+    if (!chasingPlayer && car.officer && g.peds.cops.includes(car.officer)) {
+      if (!car.officer.target) { this.waitT = (this.waitT || 0) + dt; if (this.waitT > 20 && !g.inView(car.officer.pos.x, car.officer.pos.z, 2)) { g.peds.removeCop(car.officer); this.waitT = 0; } } else this.waitT = 0;
+      c.throttle = 0; c.brake = 1; c.steer = 0; return;
+    }
     const v = car.vFwd;
     // lost sight of the player: drive to the last sighting, then search the blocks around it
     const searching = chasingPlayer && !WT.seen && WT.sinceSeen > 1.5;
@@ -224,14 +247,22 @@ export class PoliceDriver {
       aimX = tgt.x + tgt.vx * lead; aimZ = tgt.z + tgt.vz * lead;
       if (dist > 12 && !onFoot) { aimX += tgt.lx * this.offset; aimZ += tgt.lz * this.offset; } // spread out to box the suspect in
       const pv = Math.hypot(tgt.vx, tgt.vz);
-      if (onFoot) target = clamp((dist - 9) * 1.4, 0, 30);
+      const block = !onFoot && tgt.fx != null && this.suspect && this.suspect.role === 'block';
+      if (block) { // get past them, cut in across their nose and brake so they're boxed between us and the units behind
+        const rel = (car.pos.x - tgt.x) * tgt.fx + (car.pos.z - tgt.z) * tgt.fz; const side = Math.sign(this.offset || 1);
+        if (rel > 4) this.ahead = true; else if (rel < -4) this.ahead = false;
+        if (pv < 4) { aimX = tgt.x + tgt.fx * 6.5; aimZ = tgt.z + tgt.fz * 6.5; target = Math.sqrt(Math.max(0, 2 * 6 * (Math.hypot(aimX - car.pos.x, aimZ - car.pos.z) - 1))); }
+        else if (!this.ahead) { aimX = tgt.x + tgt.vx * lead + tgt.lx * side * 3.6 + tgt.fx * 7; aimZ = tgt.z + tgt.vz * lead + tgt.lz * side * 3.6 + tgt.fz * 7; target = Math.min(car.type.vmax, pv + 10); }
+        else { aimX = tgt.x + tgt.fx * (9 + pv * 0.45); aimZ = tgt.z + tgt.fz * (9 + pv * 0.45); target = Math.max(0, pv - (rel < 9 ? 7 : 3)); }
+      }
+      else if (onFoot) target = chasingPlayer ? clamp((dist - 9) * 1.4, 0, 30) : Math.min(30, Math.sqrt(2 * 6 * Math.max(0, dist - 10))); // brake in time for a suspect on foot — don't flatten them
       else if (pv < 4) { target = Math.sqrt(Math.max(0, 2 * 6 * (dist - 5.5))); aimX = tgt.x + tgt.lx * Math.sign(this.offset || 1) * 3.2; aimZ = tgt.z + tgt.lz * Math.sign(this.offset || 1) * 3.2; } // pull up alongside and box them in
       else target = Math.min(car.type.vmax, Math.sqrt((pv + 8) * (pv + 8) + 2 * 7 * Math.max(0, dist - 10))); // catch up, then ram
       this.path.set([]); this.repath = 0;
       // 4+ stars: the passenger leans out and shoots
       if (chasingPlayer && WT.stars >= 4 && dist < 32 && g.state === 'play') { this.shootT = (this.shootT ?? 1.2) - dt; if (this.shootT <= 0) { this.shootT = 1.0 + Math.random() * 0.9; const from = car.pos.clone().addScaledVector(car.left, -(car.ex + 0.15)).addScaledVector(car.up, 0.75); g.weapons.npcShoot(from, onFoot ? 0.32 : 0.28, 6); } }
     } else {
-      if (this.repath <= 0 || this.path.pts.length < 2) { this.repath = 1.4; this.buildPath(tgt); }
+      if (this.repath <= 0 || this.path.pts.length < 2) { this.repath = 1.4; this.buildPath(tgt, onFoot && !chasingPlayer); }
       [aimX, aimZ] = this.path.track(car.pos.x, car.pos.z, 7 + Math.abs(v) * 0.45);
       target = searching && this.searchPt ? 14 : car.type.vmax;
       // braking curve into the next corner: v^2 = vc^2 + 2ad
@@ -243,11 +274,13 @@ export class PoliceDriver {
         dAcc += Math.hypot(cx - bx, cz - bz);
       }
       if (dist < 12) target = Math.min(target, 6);
+      if (onFoot && !chasingPlayer) target = Math.min(target, Math.sqrt(2 * 6 * Math.max(0, dist - 10)) + 2, dist < 26 ? Math.max(0, (dist - 10) * 0.8) : 99); // suspect behind a corner: slow down, pull up and go on foot
     }
     // a suspect on foot: pull up and send the officer after them
-    if (sus && sus.onFoot && !this.suspect.done && dist < 15 && car.speed < 3 && !car.officer) g.peds.spawnCop(car, sus.ch);
+    if (sus && sus.onFoot && !this.suspect.done && dist < (los ? 15 : 24) && car.speed < 3 && !car.officer) g.peds.spawnCop(car, sus.ch);
     // rubber band: far-away cruisers get a bit of extra urgency (only once they know where to go)
     this.boost = chasingPlayer && !searching && dist > 70 && !g.inView(car.pos.x, car.pos.z, 4) ? 1.3 : 1;
+    if (this.suspect && this.suspect.call && !onFoot && dist > 40) this.boost = 1.35; // backup closing in on a fleeing car
     // feelers: steer away from anything solid right in front
     let avoid = 0;
     for (const [ang, d] of [[0.5, 6], [-0.5, 6], [0.22, 12], [-0.22, 12]]) {
@@ -257,7 +290,8 @@ export class PoliceDriver {
     if (W.blocked(car.pos.x + car.fwd.x * 7, car.pos.z + car.fwd.z * 7, 0.6) && v > 14) target = Math.min(target, 10);
     if (this.suspect && this.suspect.done) target = 0;
     if (this.reverseT > 0) { this.reverseT -= dt; c.throttle = 0; c.brake = 1; c.noReverse = false; c.steer = -this.revSteer; return; }
-    if (target > 3 && Math.abs(v) < 0.9) { this.stuckT += dt; if (this.stuckT > 1.4) { this.stuckT = 0; this.reverseT = 1.2; this.revSteer = clamp(pursue(car, aimX, aimZ) + avoid, -1, 1); this.repath = 0; } } else this.stuckT = 0;
+    if (target > 3 && Math.abs(v) < 0.9) { this.stuckT += dt; if (this.stuckT > 1.4) { this.stuckT = 0; this.reverseT = 1.2; this.revSteer = clamp(pursue(car, aimX, aimZ) + avoid, -1, 1); this.repath = 0; this.stuckN = (this.stuckN || 0) + 1; } } else this.stuckT = 0;
+    if (Math.abs(v) > 6) this.stuckN = Math.max(0, (this.stuckN || 0) - dt * 0.4);
     c.steer = clamp(pursue(car, aimX, aimZ) + avoid, -1, 1);
     speedCtl(car, target);
     if (this.boost > 1 && c.throttle > 0) car.boost = this.boost; else car.boost = 1;

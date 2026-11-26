@@ -86,18 +86,18 @@ export class Dealer {
 
 // ======================= police career =======================
 const CALLS = {
-  assault: { title: 'Assault in progress', code: '10-31', pay: 220, foot: true, act: 'fight', w: 3 },
-  robbery: { title: 'Armed robbery', code: '10-65', pay: 380, foot: true, act: 'armed', w: 2 },
-  shots: { title: 'Shots fired', code: '10-71', pay: 400, foot: true, act: 'armed', w: 1 },
-  vandal: { title: 'Vandalism', code: '10-62', pay: 160, foot: true, act: 'flee', w: 2 },
-  stolen: { title: 'Stolen vehicle', code: '10-16', pay: 340, foot: false, act: 'flee', w: 2 },
-  reckless: { title: 'Reckless driver', code: '10-55', pay: 200, foot: false, act: 'stop', w: 3 },
+  assault: { title: 'Assault in progress', code: '10-31', pay: 850, foot: true, act: 'fight', w: 3 },
+  robbery: { title: 'Armed robbery', code: '10-65', pay: 1000, foot: true, act: 'armed', w: 2 },
+  shots: { title: 'Shots fired', code: '10-71', pay: 1100, foot: true, act: 'armed', w: 1 },
+  vandal: { title: 'Vandalism', code: '10-62', pay: 750, foot: true, act: 'flee', w: 2 },
+  stolen: { title: 'Stolen vehicle', code: '10-16', pay: 1000, foot: false, act: 'flee', w: 2 },
+  reckless: { title: 'Reckless driver', code: '10-55', pay: 850, foot: false, act: 'stop', w: 3 },
 };
 const UNIFORM = { shirt: 0x1b2a4a, sleeve: 0x1b2a4a, pants: 0x121a2e, shoes: 0x111111, hair: 0x101830 };
 
 export class PoliceJob {
   constructor(game) {
-    this.g = game; this.s = game.save.cop = { joined: false, arrests: 0, calls: 0, tickets: 0, earned: 0, ...(game.save.cop || {}) };
+    this.g = game; this.s = game.save.cop = { joined: false, arrests: 0, calls: 0, tickets: 0, assists: 0, earned: 0, ...(game.save.cop || {}) };
     this.onDuty = false; this.mode = 'calls'; this.call = null; this.unit = null; this.strikes = 0; this.nextT = 6; this.payT = 45; this.patrolDist = 0; this.lastPos = new V3(); this.t = 0;
   }
   get rankIndex() { let r = 0; POLICE_RANKS.forEach((k, i) => { if (this.s.arrests >= k.at) r = i; }); return r; }
@@ -172,7 +172,7 @@ export class PoliceJob {
     this.call = call; this.s.calls++;
     const where = g.world.district(call.x, call.z);
     if (near) { g.hud.help(`~b~On patrol:~w~ ${C.title.toLowerCase()} spotted up ahead in ~y~${where}~w~.`, 4); g.audio.beep(); }
-    else { g.hud.missionCard(`${C.code} · ${C.title.toUpperCase()}`, `Dispatch: all units, ${C.title.toLowerCase()} reported in ${where}. Respond and arrest the suspect.`, '#4ea8ff'); g.audio.missionStart(); }
+    else { g.hud.missionCard(`${C.code} · ${C.title.toUpperCase()}`, `Dispatch: all units, ${C.title.toLowerCase()} reported in ${where}. Respond and arrest the suspect. Pays ${fmtMoney(this.payFor(C.pay))}.`, '#4ea8ff'); g.audio.missionStart(); }
     g.hud.waypoint = [call.x, call.z]; g.hud.routeCache = null;
     return true;
   }
@@ -194,6 +194,7 @@ export class PoliceJob {
   }
   endCall(result) {
     const g = this.g, c = this.call; if (!c) return; this.call = null;
+    this.releaseBackup(c);
     for (const ch of [c.suspect, c.victim]) if (ch) { ch.keep = false; if (ch.brain && ch.brain.mode === 'harass') ch.brain.mode = 'return'; if (ch.brain && ch.brain.mode === 'call') ch.brain.mode = 'return'; }
     if (c.suspect) c.suspect.suspect = null;
     if (c.car) { c.car.keep = false; c.car.suspect = null; if (c.car.ai && c.car.ai.busted && !result) c.car.ai.busted = false; }
@@ -202,23 +203,60 @@ export class PoliceJob {
     this.nextT = this.mode === 'calls' ? 14 + Math.random() * 14 : 28 + Math.random() * 30;
     if (result === 'fail') { g.hud.big('SUSPECT GOT AWAY', c.title, 'failed', 3); g.audio.failed(); }
   }
+  payFor(base) { return Math.round(base * this.rank.pay / 5) * 5; }
   reward(base, title, sub) {
-    const g = this.g; const was = this.rankIndex; const pay = Math.round(base * this.rank.pay / 5) * 5;
+    const g = this.g; const was = this.rankIndex; const pay = this.payFor(base);
     g.addCash(pay); this.s.earned += pay; g.hud.stunt(title, sub, pay); g.audio.passed();
     if (this.rankIndex > was) setTimeout(() => { g.hud.big('PROMOTED', `You are now a ~b~${this.rank.name}~w~. Pay x${this.rank.pay}${this.rank.car === 'policeSUV' && POLICE_RANKS[was].car !== 'policeSUV' ? ' · new unit: Interceptor Utility' : ''}`, 'passed', 4); g.audio.chime(true); }, 1600);
     g.saveGame();
+  }
+  // ---------- backup: NPC units that respond to the same call ----------
+  backupFor(c) { const g = this.g; return (c.backup || []).filter((b) => g.cars.includes(b) && !b.dead && b.ai && b.ai.suspect && b.ai.suspect.call === c); }
+  dispatchBackup(c, want, quiet) {
+    const g = this.g; c.want = want; c.backup = this.backupFor(c); const before = c.backup.length;
+    const tgt = c.suspect ? { ch: c.suspect } : c.car ? { car: c.car } : null; if (!tgt) return;
+    const at = (tgt.ch || tgt.car).pos; const dist = (o) => Math.hypot(o.pos.x - at.x, o.pos.z - at.z);
+    // units already in the area pitch in first…
+    const free = g.cars.filter((o) => o.role === 'police' && o !== g.playerCar && o.driver === 'ai' && !o.dead && o.ai && o.ai.setSuspect && !(o.ai.suspect && !o.ai.suspect.done) && dist(o) < 260).sort((a, b) => dist(a) - dist(b));
+    for (const o of free) { if (c.backup.length >= want) break; this.assign(o, c, tgt); }
+    // …then dispatch sends more from out of sight
+    for (let i = 0; i < 8 && c.backup.length < want; i++) {
+      // a fleeing car: the first unit comes the other way to cut it off, the rest come up behind
+      const car = tgt.car, v = car && car.speed > 5 && !c.backup.some((b) => (b.pos.x - at.x) * car.vel.x + (b.pos.z - at.z) * car.vel.z > 0) ? car.vel : null;
+      const ahead = v ? { x: at.x + v.x / car.speed * 110, z: at.z + v.z / car.speed * 110 } : null;
+      const sp = (ahead && g.population.spawnPoint(0, 55, true, ahead)) || g.population.spawnPoint(65, 150, true, at) || (i > 3 && g.population.spawnPoint(110, 220, false, at));
+      if (sp && Math.hypot(sp.x - at.x, sp.z - at.z) > 45) this.assign(g.spawnPolice(sp, at), c, tgt);
+    }
+    const n = c.backup.length - before;
+    if (n > 0 && !quiet) g.hud.help(`~b~Dispatch:~w~ ${n > 1 ? `${n} units` : 'a unit'} ${tgt.car ? 'joining the pursuit. They\'ll try to box the car in.' : 'on the way to back you up.'}`, 3.5);
+  }
+  assign(o, c, tgt) {
+    // the first unit on a car tries to get in front of it; everyone else tails and pins it from the sides
+    const role = tgt.car && !c.backup.some((b) => b.ai.suspect && b.ai.suspect.role === 'block') ? 'block' : 'tail';
+    o.ai.setSuspect({ ...tgt, call: c, role }, true); o.ai.offset = (c.backup.length % 2 ? -1 : 1) * (2.4 + Math.random() * 0.8); o.keep = true; c.backup.push(o);
+  }
+  retarget(c, ch) { for (const b of this.backupFor(c).concat((c.backup || []).filter((b) => this.g.cars.includes(b) && !b.dead && b.ai && !b.ai.suspect))) { b.ai.setSuspect({ ch, call: c, role: 'tail' }, true); if (!c.backup.includes(b)) c.backup.push(b); } }
+  releaseBackup(c) {
+    for (const b of c.backup || []) { b.keep = false; if (b.ai && b.ai.suspect && b.ai.suspect.call === c) b.ai.endSuspect(); if (b.officer && b.officer.target && b.officer.target.suspect === c) b.officer.target = null; }
+    c.backup = [];
+  }
+  // a unit detained the suspect before the player could: a smaller cut for the assist
+  assist(c, ch) {
+    ch.cuffed = true; ch.keep = false; ch.suspect = null; this.s.assists = (this.s.assists || 0) + 1;
+    this.reward((c.pay || 600) * 0.5, 'BACKUP MADE THE ARREST', `${c.title} · assist · cuff them yourself for full pay`);
+    if (this.call === c) this.endCall('done');
   }
   arrest(ch) {
     const g = this.g; if (ch.cuffed) return; ch.cuffed = true; ch.brain.mode = 'surrender'; ch.surrender = true; ch.armed = false; ch.gun = null; ch.aimPose = false; ch.surT = 0; ch.keep = false;
     this.s.arrests++; g.stats.arrests = (g.stats.arrests || 0) + 1;
     const c = ch.suspect || this.call; const fast = c && c.t < (c.near ? 60 : 110);
-    const base = (c && c.pay) || 150; this.reward(base + (fast ? 60 : 0), 'SUSPECT ARRESTED', `${c ? c.title : 'Troublemaker'}${fast ? ' · fast response' : ''}`);
+    const base = (c && c.pay) || 600; this.reward(base + (fast ? 150 : 0), 'SUSPECT ARRESTED', `${c ? c.title : 'Troublemaker'}${fast ? ' · fast response' : ''}`);
     if (c && this.call === c) this.endCall('done');
     ch.suspect = null;
   }
   ticket(car) {
     const g = this.g; const c = this.call; this.s.tickets++;
-    this.reward(c ? c.pay * 0.6 : 90, 'TICKET ISSUED', 'Reckless driving · driver released');
+    this.reward(c ? c.pay * 0.7 : 500, 'TICKET ISSUED', 'Reckless driving · driver released');
     if (car.ai) { car.ai.busted = false; car.ai.fleeing = false; car.ai.panicT = 0; car.ai.cruise = 11 + Math.random() * 3; car.ai.pullT = 0; } car.hazard = false;
     if (c && this.call === c) this.endCall('done');
   }
@@ -231,13 +269,13 @@ export class PoliceJob {
     if (this.strikes > 0) { this.strikeT = (this.strikeT || 0) + dt; if (this.strikeT > 90) { this.strikeT = 0; this.strikes--; } } // a clean stretch earns a strike back
     // patrol pay for miles covered
     this.patrolDist += Math.min(40, Math.hypot(g.focus.x - this.lastPos.x, g.focus.z - this.lastPos.z)); this.lastPos.copy(g.focus);
-    this.payT -= dt; if (this.payT <= 0) { this.payT = 45; if (this.mode === 'patrol' && this.patrolDist > 120) { const p = Math.round(Math.min(70, this.patrolDist * 0.07) * this.rank.pay / 5) * 5; g.addCash(p); this.s.earned += p; g.hud.help(`Patrol pay ~g~+${fmtMoney(p)}`, 2); } this.patrolDist = 0; }
+    this.payT -= dt; if (this.payT <= 0) { this.payT = 45; if (this.mode === 'patrol' && this.patrolDist > 120) { const p = this.payFor(Math.min(160, this.patrolDist * 0.16)); g.addCash(p); this.s.earned += p; g.hud.help(`Patrol pay ~g~+${fmtMoney(p)}`, 2); } this.patrolDist = 0; }
     // unit car: respawn at the station if it's lost
     if (this.unit && (!g.cars.includes(this.unit) || this.unit.dead) && this.unit !== g.playerCar) this.unit = null;
     // new calls / incidents
     if (!this.call) { this.nextT -= dt; if (this.nextT <= 0) { if (!this.startCall(this.pickType())) this.nextT = 3; } }
     // hostile troublemakers anywhere near an on-duty officer are fair game
-    for (const h of g.peds.list) if (h.naughty && !h.suspect && !h.cuffed && h.state !== 'seat' && ['fight', 'shootback', 'ambush'].includes(h.brain.mode) && Math.hypot(h.pos.x - pt.x, h.pos.z - pt.z) < 60) h.suspect = { title: 'Disorderly troublemaker', pay: 140, t: 0, near: true };
+    for (const h of g.peds.list) if (h.naughty && !h.suspect && !h.cuffed && h.state !== 'seat' && ['fight', 'shootback', 'ambush'].includes(h.brain.mode) && Math.hypot(h.pos.x - pt.x, h.pos.z - pt.z) < 60) h.suspect = { title: 'Disorderly troublemaker', pay: 600, t: 0, near: true };
     const c = this.call;
     if (c) {
       c.t += dt;
@@ -251,19 +289,34 @@ export class PoliceJob {
         c.state = 'engaged'; g.hud.waypoint = null;
         if (sus) { const onFoot = !car && d < 14; sus.brain.mode = c.act === 'armed' ? 'shootback' : c.act === 'fight' && onFoot ? 'fight' : 'flee'; sus.brain.t = 0; sus.panic = 0; if (c.act === 'armed') sus.armed = true; if (c.victim) { c.victim.brain.mode = 'return'; c.victim.panic = 3; c.victim.keep = false; } }
         if (sc && sc.ai) { if (c.act === 'stop' && Math.random() < 0.7) { sc.ai.pullOver = true; c.stopping = true; } else { sc.ai.flee(); c.fleeing = true; } }
+        if (sus || c.fleeing) this.dispatchBackup(c, c.act === 'armed' || (this.mode === 'calls' && c.fleeing) ? 2 : 1);
         g.hud.help(c.foot ? (c.act === 'armed' ? '~r~The suspect is armed!~w~ Take them down, then press [F] to arrest.' : 'Catch the suspect: tackle them, knock them down or hold them at gunpoint, then press [F] to arrest.') : c.stopping ? 'The driver is pulling over. Walk up to the window and press [F] to write a ticket.' : '~r~They\'re running!~w~ Box the car in until it stops.', 4);
       }
       if (c.state === 'engaged') {
         if (sus) g.hud.objective(`Arrest the suspect · ~y~${Math.round(d)} m`);
         else if (c.stopping) g.hud.objective(sc.ai && sc.ai.busted ? 'Walk up to the driver\'s window and press [F]' : 'The driver is pulling over…');
         else g.hud.objective(`Stop the vehicle · ~y~${Math.round(d)} m`);
-        if (d > 240) { c.lostT = (c.lostT || 0) + dt; if (c.lostT > 8) { this.endCall('fail'); return; } } else c.lostT = 0;
+        // keep the backup topped up: replace units that got wrecked or wedged somewhere out of sight
+        if (c.want && (c.reinforceT = (c.reinforceT ?? 5) - dt) <= 0) {
+          c.reinforceT = 5;
+          // (and a unit left far behind is relieved by one in the area ahead of the suspect)
+          for (const b of this.backupFor(c)) if (((b.ai.stuckN || 0) > 4 || (sc && Math.hypot(b.pos.x - tgt.x, b.pos.z - tgt.z) > 170)) && !g.inView(b.pos.x, b.pos.z, 4)) { c.backup.splice(c.backup.indexOf(b), 1); g.removeCar(b); }
+          if (this.backupFor(c).length < c.want && !(sus && sus.detained)) this.dispatchBackup(c, c.want, true);
+        }
+        const tailed = this.backupFor(c).some((b) => Math.hypot(b.pos.x - tgt.x, b.pos.z - tgt.z) < 130); // units still on them
+        // (someone waiting with their hands up isn't getting away)
+        if (d > 240 && !tailed && !(sus && sus.brain.mode === 'surrender')) { c.lostT = (c.lostT || 0) + dt; if (c.lostT > 8) { this.endCall('fail'); return; } } else c.lostT = 0;
+        if (sus && sus.detained && !sus.cuffed) { // a backup officer has them in hand
+          c.custodyT = (c.custodyT || 0) + dt; const close = d < 35;
+          g.hud.objective(close ? 'Backup detained the suspect. Press ~b~[F]~w~ next to them to cuff them' : 'Backup has the suspect in custody');
+          if (c.custodyT > (close ? 20 : 4)) { this.assist(c, sus); return; }
+        }
       }
       if (c.t > (c.near ? 200 : 320)) { this.endCall(c.state === 'enroute' ? null : 'fail'); if (c.state === 'enroute') g.hud.help('Dispatch cancelled that call. Another unit handled it.', 3); return; }
       // a fleeing car that's boxed in: the driver gives up and gets out
       if (sc && c.fleeing && g.cars.includes(sc)) {
-        const near = car && Math.hypot(car.pos.x - sc.pos.x, car.pos.z - sc.pos.z) < 9;
-        if ((sc.speed < 1.5 && near) || sc.dead || sc.upsideT > 2) { c.bustT = (c.bustT || 0) + dt; if (c.bustT > 1.8) this.driverOut(c, sc); } else c.bustT = Math.max(0, (c.bustT || 0) - dt);
+        const near = (car && Math.hypot(car.pos.x - sc.pos.x, car.pos.z - sc.pos.z) < 9) || g.cars.some((o) => o.role === 'police' && o !== sc && o.driver && !o.dead && Math.hypot(o.pos.x - sc.pos.x, o.pos.z - sc.pos.z) < 9);
+        if ((sc.speed < 2.2 && near) || sc.dead || sc.upsideT > 2) { c.bustT = (c.bustT || 0) + dt; if (c.bustT > 1.4) this.driverOut(c, sc); } else c.bustT = Math.max(0, (c.bustT || 0) - dt * 0.5);
       }
     }
   }
@@ -271,7 +324,7 @@ export class PoliceJob {
     const g = this.g; c.fleeing = false; c.car = null; sc.keep = false; sc.suspect = null; if (sc.ai) { sc.ai.busted = true; } sc.hazard = true;
     const ch = sc.driverChar; if (!ch) { this.endCall('fail'); return; }
     sc.driverChar = null; ch.state = 'walk'; ch.scale = 1; ch.pos.copy(sc.pos).addScaledVector(sc.left, sc.ex + 1.0); ch.pos.y = g.world.ground(ch.pos.x, ch.pos.z);
-    g.peds.adopt(ch, 0); ch.naughty = true; ch.keep = true; ch.health = 70; ch.suspect = c; c.suspect = ch; c.foot = true;
+    g.peds.adopt(ch, 0); ch.naughty = true; ch.keep = true; ch.health = 70; ch.suspect = c; c.suspect = ch; c.foot = true; this.retarget(c, ch);
     if (Math.random() < 0.65) { ch.brain.mode = 'surrender'; g.hud.help('The driver gave up. Walk over and press [F] to arrest them.', 3); }
     else { ch.brain.mode = 'flee'; ch.brain.t = 0; g.hud.help('~r~The driver bailed and is running!~w~ Catch them on foot.', 3); }
   }

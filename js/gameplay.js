@@ -354,7 +354,11 @@ export class Stunts {
   update(dt) {
     const g = this.game; const car = g.playerCar; if (!car) { this.air = 0; this.endDrift(false); return; }
     if (car !== this.lastCar) { this.lastCar = car; this.air = 0; }
-    const airborne = car.grounded === 0;
+    // no wheels touching isn't always flight: a car lying on its roof or side, or beached on something, sits still
+    let airborne = car.grounded === 0;
+    if (airborne && car.speed < 2 && Math.abs(car.vel.y) < 0.8) { this.restT = (this.restT || 0) + dt; if (this.restT > 0.4) this.dud = true; } else this.restT = 0;
+    if (this.air > 8) this.dud = true;
+    if (this.dud) { if (airborne) { this.air = 0; return; } this.dud = false; airborne = false; this.air = 0; } // (flipping back with R lands nothing)
     if (airborne) {
       if (this.air === 0) { this.takeoff.copy(car.pos); this.maxH = 0; this.rot.pitch = this.rot.roll = this.rot.yaw = 0; this.fromRamp = g.world.ramps.find((r) => Math.hypot(r.top[0] - car.pos.x, r.top[1] - car.pos.z) < 8); }
       this.air += dt; this.maxH = Math.max(this.maxH, car.pos.y - g.world.ground(car.pos.x, car.pos.z));
