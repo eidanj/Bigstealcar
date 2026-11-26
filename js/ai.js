@@ -83,15 +83,24 @@ export class TrafficDriver {
     const car = this.car, g = this.game, W = g.world; const c = car.ctrl; c.handbrake = false;
     if (car.dead) { c.throttle = 0; c.brake = 1; return; }
     if (this.busted) { c.throttle = 0; c.brake = 1; c.steer = 0; car.hazard = true; car.signal = null; this.stuckLong = (this.stuckLong || 0) + dt; return; }
+    if (this.pullOver) { // lit up by an officer: indicate, ease over to the curb and stop
+      this.pullT = (this.pullT || 0) + dt; const [px, pz] = this.path.track(car.pos.x, car.pos.z, 7); c.steer = clamp(pursue(car, px - car.left.x * 2.4, pz - car.left.z * 2.4), -0.6, 0.6);
+      speedCtl(car, Math.max(0, 9 - this.pullT * 4)); car.signal = 'R'; car.hazard = false;
+      if ((car.speed < 0.4 && this.pullT > 1) || this.pullT > 8) { this.pullOver = false; this.busted = true; }
+      return;
+    }
     const v = car.vFwd; const x = car.pos.x, z = car.pos.z;
     // keep a couple of roads queued
     if (this.path.pts.length - this.path.seg < 4) this.extend();
     const [tx, tz] = this.path.track(x, z, 5 + Math.abs(v) * 0.55);
     if (this.path.lat > 14) { this.lostT += dt; if (this.lostT > 1.5) { this.reroute(); this.lostT = 0; } } else this.lostT = 0;
-    let target = this.cruise * (car.type.cls === 'Van' ? 0.85 : 1);
+    let target = this.cruise * (car.type.cls === 'Van' ? 0.85 : car.type.cls === 'Truck' ? 0.72 : 1);
     if (this.path.flags[this.path.seg + 1] || this.path.flags[this.path.seg + 2]) target = Math.min(target, 7.5);
     // spooked by gunfire: floor it and ignore the lights for a while
     if (this.panicT > 0) { this.panicT -= dt; target = this.cruise * (this.fleeing ? 2.1 : 1.75); if (Math.random() < dt * 0.6) g.audio.honk(car.pos, 0.6); }
+    // a siren coming up behind: slow down and move over
+    if (!this.fleeing) { this.yieldT = Math.max(0, (this.yieldT || 0) - dt); for (const o of g.cars) { if (!o.siren || o === car || !(o.role === 'police' || o === g.playerCar) || o.speed < 4) continue; const dx = o.pos.x - x, dz = o.pos.z - z; const f = dx * car.fwd.x + dz * car.fwd.z; if (f < -2 && f > -38 && Math.abs(dx * car.left.x + dz * car.left.z) < 5 && o.vel.dot(car.fwd) > 2) this.yieldT = 2.2; }
+      if (this.yieldT > 0) target = Math.min(target, 3.5); }
     // traffic light at the stop line of the current road
     const dStop = this.path.remainingTo(this.path.stopIdx, x, z);
     if (dStop > -1 && dStop < 45 && !(this.panicT > 0)) {
@@ -120,7 +129,7 @@ export class TrafficDriver {
     if (Math.abs(v) < 0.5) this.stuckLong = (this.stuckLong || 0) + dt; else this.stuckLong = 0;
     if (this.reverseT > 0) { this.reverseT -= dt; c.throttle = 0; c.brake = 1; c.noReverse = false; c.steer = -this.revSteer; return; }
     if (target > 3 && Math.abs(v) < 0.6) { this.stuckT += dt; if (this.stuckT > 2.5) { this.stuckT = 0; this.reverseT = 1.4; this.revSteer = pursue(car, tx, tz); } } else this.stuckT = 0;
-    c.steer = pursue(car, tx, tz);
+    c.steer = pursue(car, this.yieldT > 0 ? tx - car.left.x * 1.6 : tx, this.yieldT > 0 ? tz - car.left.z * 1.6 : tz);
     speedCtl(car, target);
     car.signal = this.upcomingTurn(x, z);
     car.hazard = this.stuckLong > 8 || car.health < 250; if (this.fleeing) car.signal = null;
@@ -277,7 +286,7 @@ export class Population {
     const g = this.game; const f = g.focus; this.timer -= dt; this.parkTimer -= dt;
     // despawn far cars
     for (const car of [...g.cars]) {
-      if (car === g.playerCar || car === g.lastCar) continue;
+      if (car === g.playerCar || car === g.lastCar || car.keep) continue;
       const d = Math.hypot(car.pos.x - f.x, car.pos.z - f.z);
       const far = car.role === 'parked' ? 210 : car.role === 'police' ? 300 : 270;
       if (d > far || (car.role === 'traffic' && car.ai && car.ai.stuckLong > 20 && !g.inView(car.pos.x, car.pos.z, 4)) || (car.dead && d > 120) || (car.role === 'police' && !car.patrol && car.ai && car.ai.leaveT > 25 && !g.inView(car.pos.x, car.pos.z, 4))) g.removeCar(car);

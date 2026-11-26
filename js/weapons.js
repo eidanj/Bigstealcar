@@ -218,7 +218,7 @@ export class Weapons {
     if (byPlayer && ch.naughty) g.peds.provoked(ch, melee);
     if (ch.health <= 0) {
       ch.koT = 7.5; ch.knock(new V3(dir.x * (melee ? 4 : 3), 2.2, dir.z * (melee ? 4 : 3)), 0.8);
-      if (byPlayer) { g.stats.knocked++; g.wanted.crime(cop ? 40 : melee ? 10 : 20, cop ? 'You knocked out a ~b~cop~w~! Expect company.' : null, { direct: cop, type: 'assault', x: ch.pos.x, z: ch.pos.z }); }
+      if (byPlayer) { g.stats.knocked++; g.wanted.crime(cop ? 40 : melee ? 10 : 20, cop ? 'You knocked out a ~b~cop~w~! Expect company.' : null, { direct: cop, type: 'assault', victim: ch, x: ch.pos.x, z: ch.pos.z }); }
     } else {
       if (ch.state === 'walk') { ch.vel.x += dir.x * (melee ? 3 : 1.5); ch.vel.z += dir.z * (melee ? 3 : 1.5); if (!cop && !ch.naughty && ch.brain && ch.brain.mode !== 'surrender') { ch.panic = 4; ch.brain.flee = [dir.x, dir.z]; if (ch.brain.mode === 'call') ch.brain.mode = 'return'; } }
       if (byPlayer && !ch.naughty) g.wanted.crime(cop ? 25 : melee ? 6 : 12, null, { direct: cop, type: 'assault', victim: ch, x: ch.pos.x, z: ch.pos.z });

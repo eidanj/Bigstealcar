@@ -248,6 +248,24 @@ button { font-family: var(--hud); cursor: pointer; }
 .shopMsg { min-height: 22px; padding: 4px 20px; font-size: 14px; color: #ffd60a; }
 .shopFoot { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 14px; font-size: 13px; opacity: 0.9; }
 .shopFoot button { background: rgba(255,255,255,0.1); border: 1px solid rgba(255,255,255,0.3); color: #fff; padding: 8px 14px; letter-spacing: 0.1em; font-weight: 600; }
+#duty { margin-top: 4px; display: inline-block; padding: 3px 9px; font-family: var(--big, Oswald, Arial); font-size: 13px; letter-spacing: 0.12em; color: #fff; background: linear-gradient(90deg, #0d2c6b, #1d4ed8); border: 1px solid rgba(255,255,255,0.5); box-shadow: 0 2px 8px rgba(0,0,0,0.4); }
+#shop[data-kind="dealer"] .shopPanel { border-top-color: #ffd60a; width: min(640px, 92vw); }
+#shop[data-kind="dealer"] .shopHead { background: linear-gradient(90deg, #15171c, #2c3038); }
+#shop[data-kind="police"] .shopPanel { border-top-color: #4ea8ff; }
+#shop[data-kind="police"] .shopHead { background: linear-gradient(90deg, #0d2c6b, #071634); }
+#shop[data-kind="police"] .shopLogo { color: #fff; }
+#shop[data-kind="police"] .sBuy { background: #1d4ed8; } #shop[data-kind="dealer"] .sBuy { background: #c79a00; color: #111; }
+.sRow.car { grid-template-columns: 128px 1fr auto; } .sRow.car img { width: 128px; height: 64px; object-fit: cover; border-radius: 3px; background: #15171c; }
+.sRow b small { font-size: 11px; font-weight: 500; letter-spacing: 0.12em; opacity: 0.6; margin-left: 6px; }
+.sRow.off { opacity: 0.55; cursor: default; } .sRow.off .sBuy { background: rgba(255,255,255,0.15) !important; color: #fff; }
+.sRow .chip { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; border: 1px solid rgba(255,255,255,0.5); }
+.shopList h5 { margin: 8px 6px 2px; font-size: 12px; letter-spacing: 0.3em; opacity: 0.7; font-weight: 600; }
+.swatches { display: flex; flex-wrap: wrap; gap: 6px; padding: 6px 6px 8px; }
+.swatches button { width: 26px; height: 26px; border-radius: 50%; border: 2px solid rgba(255,255,255,0.35); cursor: pointer; padding: 0; }
+.swatches button.on { border-color: #ffd60a; box-shadow: 0 0 0 2px #ffd60a; }
+.badge { display: flex; flex-direction: column; gap: 2px; padding: 10px 12px; margin-bottom: 4px; background: rgba(78,168,255,0.14); border-left: 4px solid #4ea8ff; }
+.badge b { font-family: var(--big, Oswald, Arial); font-size: 22px; letter-spacing: 0.08em; } .badge span { font-size: 12px; opacity: 0.85; }
+@media (max-height: 560px) { .sRow.car { grid-template-columns: 96px 1fr auto; } .sRow.car img { width: 96px; height: 48px; } .swatches button { width: 22px; height: 22px; } }
 @media (max-height: 560px) { .shopLogo { font-size: 30px; } .sRow { padding: 5px 8px; grid-template-columns: 64px 1fr auto; } .sRow svg { width: 64px; } .sRow p { display: none; } }
 
 /* ======================= touch controls ======================= */

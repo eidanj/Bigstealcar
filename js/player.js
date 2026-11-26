@@ -52,6 +52,11 @@ export class Player {
       g.hud.prompt('[F] Shop at ~y~Blast Barn~w~'); if (input.hit('KeyF', 'KeyE') && g.lockControls <= 0) g.openShop(st);
       this.hurtT += dt; return;
     }
+    // dealership desk, police front desk, police work (arrests, tickets)
+    const dl = g.world.specials.dealer, ps = g.world.specials.police;
+    if (dl && Math.hypot(ch.pos.x - dl.desk[0], ch.pos.z - dl.desk[1]) < 2.4) { g.hud.prompt('[F] Browse cars at ~y~Big Deal Autos'); if (input.hit('KeyF', 'KeyE') && g.lockControls <= 0) g.openShop(dl, 'dealer'); this.hurtT += dt; return; }
+    if (ps && ps.desk && Math.hypot(ch.pos.x - ps.desk[0], ch.pos.z - ps.desk[1]) < 2.6) { g.hud.prompt(g.police.s.joined ? '[F] SAPD front desk' : '[F] Join the ~b~San Altekz Police'); if (input.hit('KeyF', 'KeyE') && g.lockControls <= 0) g.openShop(ps, 'police'); this.hurtT += dt; return; }
+    if (g.police.onDuty && g.lockControls <= 0 && g.police.footWork(dt)) { this.hurtT += dt; return; }
     // car prompt + enter
     const car = st ? null : this.nearestCar();
     if (car && g.lockControls <= 0) {

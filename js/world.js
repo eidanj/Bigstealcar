@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { CITY, SPECIAL_BLOCKS, DISTRICTS } from './config.js';
+import { CITY, SPECIAL_BLOCKS, DISTRICTS, CAR_TYPES } from './config.js';
 import { rng, clamp } from './util.js';
 import * as TX from './textures.js';
 
@@ -543,7 +543,7 @@ export class World {
     at(1, 3).special = 'spray'; at(6, 6).special = 'spray'; at(5, 2).special = 'police'; at(3, 6).special = 'hospital';
     at(1, 3).alley = null; at(6, 6).alley = null; at(5, 2).alley = null; at(3, 6).alley = null;
     at(4, 4).special = 'tower';
-    at(3, 1).special = 'store'; at(3, 1).alley = null; at(7, 5).special = 'store'; at(7, 5).alley = null;
+    at(3, 1).special = 'store'; at(3, 1).alley = null; at(2, 1).special = 'dealer'; at(2, 1).alley = null; at(7, 5).special = 'store'; at(7, 5).alley = null;
     this.linkRings();
   }
 
@@ -600,6 +600,7 @@ export class World {
     if (b.special === 'police') rects = this.placeCivic(b, rects, 'police');
     if (b.special === 'hospital') rects = this.placeCivic(b, rects, 'hospital');
     if (b.special === 'store') rects = this.placeStore(b);
+    if (b.special === 'dealer') rects = this.placeDealer(b);
     for (const r of rects) this.subdivide(b, r, R, 0);
   }
 
@@ -776,18 +777,86 @@ export class World {
     return rects.flatMap(([a, c, e, f]) => [[x1 + 1, c, e, f], [a, z1 + 1, x1 + 1, f]]).filter(([a, c, e, f]) => e - a > 6 && f - c > 6);
   }
 
+  ensureStoreMats() {
+    if (this.storeMat) return;
+    this.storeMat = {
+      peg: new THREE.MeshStandardMaterial({ map: TX.pegboard(), roughness: 0.8, emissive: 0x2a1c0c, emissiveIntensity: 0.6 }),
+      floor: new THREE.MeshStandardMaterial({ map: TX.tiles(), roughness: 0.35, metalness: 0.1 }),
+      ceil: new THREE.MeshStandardMaterial({ map: TX.ceilingPanels(), emissiveMap: TX.ceilingPanels(), emissive: 0xffffff, emissiveIntensity: 1.6 }),
+      glass: new THREE.MeshPhysicalMaterial({ color: 0x9fd3e6, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.35 }),
+      showFloor: (() => { const c = TX.concrete(2, 205); return new THREE.MeshStandardMaterial({ map: c.map, normalMap: c.normalMap, normalScale: new THREE.Vector2(0.25, 0.25), color: 0xf2f2f2, roughness: 0.16, metalness: 0.05 }); })(),
+      plaster: new THREE.MeshStandardMaterial({ color: 0xeeeeea, roughness: 0.85 }),
+      dark: new THREE.MeshPhysicalMaterial({ color: 0x0c1418, roughness: 0.08, metalness: 0.3, clearcoat: 1, transparent: true, opacity: 0.8 }),
+    };
+    this.storeGB = { peg: new GB(), floor: new GB(), ceil: new GB(), show: new GB(), plaster: new GB() };
+  }
+
+  // car dealership: glass showroom with cars on turntables, a salesperson's desk, and a lot full of cars out front
+  placeDealer(b) {
+    const { cx, cz } = b; const L = LOT; this.ensureStoreMats();
+    const x0 = cx - 22, x1 = cx + 22, z0 = cz + 0.5, z1 = cz + 25, h = CURB + 7.2, t = 0.35, dw = 4.2;
+    const F = this.facade.stucco; const tint = hexCol(0xf3f4f6);
+    const wall = (ax0, ax1, ay0, ay1, az0, az1) => { F.gb.sides(ax0, ax1, ay0, ay1, az0, az1, F.tw, F.th, tint, ay0 - CURB); this.gb.roof.top(ax0, ax1, ay1, az0, az1, 4, [0.6, 0.6, 0.6]); this.boxCollider(ax0, ax1, az0, az1, 0, ay1); };
+    wall(x0, x1, CURB, h, z1 - t, z1); wall(x0, x0 + t, CURB, h, z0, z1); wall(x1 - t, x1, CURB, h, z0, z1);
+    this.gb.roof.top(x0, x1, h, z0, z1, 4, [0.72, 0.72, 0.72]);
+    // glass front with mullions, a dark fascia band and the door
+    const gy0 = CURB, gy1 = h - 1.5;
+    for (const [a, c] of [[x0, cx - dw / 2], [cx + dw / 2, x1]]) {
+      const gm = new THREE.Mesh(new THREE.PlaneGeometry(c - a, gy1 - gy0), this.storeMat.glass); gm.position.set((a + c) / 2, (gy0 + gy1) / 2, z0); gm.rotation.y = Math.PI; this.root.add(gm);
+      this.boxCollider(a, c, z0 - 0.12, z0 + 0.12, 0, h);
+    }
+    for (let x = x0; x <= x1 + 0.01; x += 4) if (Math.abs(x - cx) > dw / 2 + 0.2) this.gb.metal.box(x - 0.07, x + 0.07, CURB, gy1, z0 - 0.08, z0 + 0.08, [1, 1, 1]);
+    for (const x of [cx - dw / 2, cx + dw / 2]) this.gb.metal.box(x - 0.1, x + 0.1, CURB, gy1, z0 - 0.1, z0 + 0.1, [1, 1, 1]);
+    this.gb.metal.box(x0, x1, gy0 + 3.1, gy0 + 3.2, z0 - 0.06, z0 + 0.06, [1, 1, 1]);
+    this.gb.props.box(x0 - 0.2, x1 + 0.2, gy1, h + 0.3, z0 - 0.3, z0 + 0.05, [0.12, 0.13, 0.16]);
+    this.props.sign('BIG DEAL AUTOS', cx, gy1 + 0.85, z0 - 0.42, Math.PI, 16, 1.3, { bg: '#111318', fg: '#ffd60a', border: '#ffd60a' });
+    // inside: gloss floor, light panels, turntables, salesperson desk
+    const P = this.storeGB, ix0 = x0 + t + 0.01, ix1 = x1 - t - 0.01, iz0 = z0 + 0.15, iz1 = z1 - t - 0.01;
+    P.show.top(ix0, ix1, CURB + 0.02, iz0, iz1, 4);
+    // plain plastered walls inside (the outside facade stays outside), with a dark skirting line
+    P.plaster.quad([ix1, CURB, iz1], [ix0, CURB, iz1], [ix0, h, iz1], [ix1, h, iz1], [0, 0, -1], 0, 1, 0, 1);
+    P.plaster.quad([ix0, CURB, iz1], [ix0, CURB, iz0], [ix0, h, iz0], [ix0, h, iz1], [1, 0, 0], 0, 1, 0, 1);
+    P.plaster.quad([ix1, CURB, iz0], [ix1, CURB, iz1], [ix1, h, iz1], [ix1, h, iz0], [-1, 0, 0], 0, 1, 0, 1);
+    this.gb.props.box(ix0, ix1, CURB, CURB + 0.14, iz1 - 0.04, iz1, [0.2, 0.2, 0.22]); this.gb.props.box(ix0, ix0 + 0.04, CURB, CURB + 0.14, iz0, iz1, [0.2, 0.2, 0.22]); this.gb.props.box(ix1 - 0.04, ix1, CURB, CURB + 0.14, iz0, iz1, [0.2, 0.2, 0.22]);
+    for (const [px, w] of [[cx - 12, 9], [cx + 3, 9]]) this.props.sign(px < cx ? 'NEW ARRIVALS' : 'LUXURY LINE', px, CURB + 5.2, iz1 - 0.12, Math.PI, w * 0.6, 0.9, { bg: '#15171c', fg: '#ffd60a', size: 60 });
+    P.ceil.quad([ix0, h - 0.02, iz0], [ix1, h - 0.02, iz0], [ix1, h - 0.02, iz1], [ix0, h - 0.02, iz1], [0, -1, 0], 0, (ix1 - ix0) / 3, 0, (iz1 - iz0) / 3);
+    const turn = [[cx - 12, cz + 11], [cx + 3, cz + 11]]; const m = new THREE.Matrix4();
+    for (const [tx, tz] of turn) { m.makeTranslation(tx, CURB + 0.06, tz); this.gb.metal.geo(new THREE.CylinderGeometry(3.4, 3.5, 0.1, 40), m, [0.85, 0.86, 0.9]); m.makeTranslation(tx, CURB + 0.115, tz); this.gb.props.geo(new THREE.CylinderGeometry(3.2, 3.2, 0.02, 40), m, [0.16, 0.17, 0.2]); this.circleCollider(tx, tz, 2.9, 0, 1.4, null, true); }
+    const dx0 = cx + 13.5, dx1 = cx + 19.5, dz0 = cz + 17.2, dz1 = cz + 18.4;
+    this.gb.props.box(dx0, dx1, CURB, CURB + 1.05, dz0, dz1, [0.95, 0.95, 0.96]); this.gb.props.box(dx0 - 0.05, dx1 + 0.05, CURB + 1.05, CURB + 1.1, dz0 - 0.1, dz1 + 0.05, [0.2, 0.21, 0.24]);
+    this.boxCollider(dx0, dx1, dz0, dz1, 0, CURB + 1.1);
+    this.props.sign('SALES', (dx0 + dx1) / 2, CURB + 3.4, z1 - t - 0.1, Math.PI, 3.2, 0.8, { bg: '#0b3d91', fg: '#ffffff', size: 70 });
+    const inside = [{ type: 'super', color: 0xe0661b, x: turn[0][0], z: turn[0][1], yaw: 0.6, spin: 1 }, { type: 'luxury', color: 0x111214, x: turn[1][0], z: turn[1][1], yaw: -0.4, spin: -1 },
+      { type: 'sports', color: 0xd8c33a, x: cx - 14, z: cz + 20.5, yaw: Math.PI / 2 + 0.35 }, { type: 'ev', color: 0xf2f2f0, x: cx + 3, z: cz + 20.6, yaw: -Math.PI / 2 - 0.3 }];
+    // outdoor lot: asphalt, painted bays, two rows of cars nose-out to the street, flags and a pylon sign
+    this.gb.asphalt.top(cx - L, cx + L, CURB + 0.004, cz - L, cz - 0.6, 12);
+    const lot = []; const rows = [cz - 21.5, cz - 9.5]; const outTypes = ['coupe', 'muscle', 'suv', 'pickup', 'minivan', 'wagon', 'classic', 'hatch', 'sedan', 'pickupS', 'van', 'taxi', 'boxtruck', 'dump'];
+    const cols = [0xb3121b, 0x1d3a6e, 0xb8bcc2, 0x1f4d36, 0x2a7f8f, 0xc9b48f, 0x8a1538, 0x3c6e9e, 0xf2f2f0, 0xe0661b, 0x5d6168, 0x6b4e9b];
+    let k = 0;
+    for (const rz of rows) for (let i = 0; i < 6; i++) {
+      const x = cx - 25 + i * 7; const type = outTypes[k % outTypes.length]; lot.push({ type, color: cols[k % cols.length], x, z: rz, yaw: Math.PI }); k++;
+      for (const e of [-3.5, 3.5]) this.gb.props.box(x + e - 0.06, x + e + 0.06, CURB + 0.006, CURB + 0.012, rz - 3, rz + 3, [0.92, 0.92, 0.9]);
+    }
+    // the trucks are long: give the back row's last two bays to them
+    lot[10].type = 'boxtruck'; lot[11].type = 'dump';
+    for (const d of lot) { const ty = CAR_TYPES[d.type]; this.boxCollider(d.x - ty.W / 2, d.x + ty.W / 2, d.z - ty.L / 2, d.z + ty.L / 2, 0, CURB + ty.H, true); }
+    const bay = { x: cx + 23, z: cz - 16, yaw: Math.PI };
+    for (const [ax, az, bx, bz] of [[bay.x - 1.6, bay.z - 3.2, bay.x + 1.6, bay.z - 3.05], [bay.x - 1.6, bay.z + 3.05, bay.x + 1.6, bay.z + 3.2], [bay.x - 1.6, bay.z - 3.2, bay.x - 1.45, bay.z + 3.2], [bay.x + 1.45, bay.z - 3.2, bay.x + 1.6, bay.z + 3.2]]) this.gb.props.box(ax, bx, CURB + 0.006, CURB + 0.014, az, bz, [1.0, 0.82, 0.1]);
+    { const g = this.props.sign('DELIVERY', bay.x + 2.6, CURB + 2.4, bay.z + 3.3, Math.PI, 2.6, 0.7, { bg: '#ffd60a', fg: '#111', size: 70 }); void g; m.makeTranslation(bay.x + 2.6, CURB + 1.0, bay.z + 3.45); this.gb.metal.geo(new THREE.CylinderGeometry(0.05, 0.05, 2.0, 8), m, [1, 1, 1]); }
+    // pylon sign at the corner, readable from both directions
+    m.makeTranslation(cx - L + 2, CURB + 5, cz - L + 2); this.gb.metal.geo(new THREE.CylinderGeometry(0.22, 0.28, 10, 12), m, [1, 1, 1]); this.circleCollider(cx - L + 2, cz - L + 2, 0.3, 0, 10, null, true);
+    for (const yaw of [Math.PI, 0, Math.PI / 2, -Math.PI / 2]) this.props.sign('BIG DEAL', cx - L + 2 + Math.sin(yaw) * 0.25, CURB + 9.6, cz - L + 2 + Math.cos(yaw) * 0.25, yaw, 3.6, 1.6, { bg: '#c1121f', fg: '#ffffff', border: '#ffd60a' });
+    const flagCols = [[0.85, 0.1, 0.1], [1, 0.8, 0.1], [0.1, 0.35, 0.85], [0.95, 0.95, 0.95]];
+    for (let i = 0; i < 7; i++) { const fx = cx - 24 + i * 8, fz = cz - L + 0.6; m.makeTranslation(fx, CURB + 2.8, fz); this.gb.metal.geo(new THREE.CylinderGeometry(0.05, 0.05, 5.6, 6), m, [1, 1, 1]); m.makeTranslation(fx + 0.55, CURB + 5.1, fz); this.gb.props.geo(new THREE.BoxGeometry(1.0, 0.7, 0.03), m, flagCols[i % 4]); }
+    this.buildings.push({ x0, z0, x1, z1, h: 7.2, style: 'dealer' });
+    this.specials.dealer = { x: cx + 23, z: cz - L - 4, yaw: Math.PI, door: [cx, z0], desk: [(dx0 + dx1) / 2, dz0 - 1.0], clerk: [(dx0 + dx1) / 2, dz1 + 1.0], light: [cx, h - 0.8, cz + 13], x0: ix0, x1: ix1, z0: iz0, z1: iz1, bay, displays: [...inside, ...lot], icon: [cx, cz - 10] };
+    return [];
+  }
+
   // walk-in gun store: brick shell with an open doorway, pegboard gun wall, counter and a clerk
   placeStore(b) {
     const { cx, cz } = b; const x0 = cx + 2, x1 = cx + 16, z0 = cz - LOT, z1 = z0 + 13, h = CURB + 5.2, t = 0.3, dw = 2.6, dh = CURB + 3.1; const gx = (x0 + x1) / 2;
-    if (!this.storeMat) {
-      this.storeMat = {
-        peg: new THREE.MeshStandardMaterial({ map: TX.pegboard(), roughness: 0.8, emissive: 0x2a1c0c, emissiveIntensity: 0.6 }),
-        floor: new THREE.MeshStandardMaterial({ map: TX.tiles(), roughness: 0.35, metalness: 0.1 }),
-        ceil: new THREE.MeshStandardMaterial({ map: TX.ceilingPanels(), emissiveMap: TX.ceilingPanels(), emissive: 0xffffff, emissiveIntensity: 1.6 }),
-        glass: new THREE.MeshPhysicalMaterial({ color: 0x9fd3e6, roughness: 0.05, metalness: 0.1, transparent: true, opacity: 0.35 }),
-      };
-      this.storeGB = { peg: new GB(), floor: new GB(), ceil: new GB() };
-    }
+    this.ensureStoreMats();
     const F = this.facade.brick; const tint = [0.78, 0.42, 0.38];
     const wall = (ax0, ax1, ay0, ay1, az0, az1) => { F.gb.sides(ax0, ax1, ay0, ay1, az0, az1, F.tw, F.th, tint, ay0 - CURB); this.gb.roof.top(ax0, ax1, ay1, az0, az1, 4, [0.6, 0.6, 0.6]); this.boxCollider(ax0, ax1, az0, az1, 0, ay1); };
     wall(x0, x1, CURB, h, z1 - t, z1); wall(x0, x0 + t, CURB, h, z0, z1); wall(x1 - t, x1, CURB, h, z0, z1);
@@ -815,6 +884,7 @@ export class World {
     const L = LOT; return [[cx - L, cz - L, x0 - 1, cz + L], [x1 + 1, cz - L, cx + L, cz + L], [x0 - 1, z1 + 1, x1 + 1, cz + L]];
   }
   interiorAt(x, z) { for (const s of this.specials.stores || []) if (x > s.x0 - 0.2 && x < s.x1 + 0.2 && z > s.z0 - 0.4 && z < s.z1 + 0.2) return s; return null; }
+  inDealer(x, z) { const d = this.specials.dealer; return !!d && x > d.x0 && x < d.x1 && z > d.z0 - 0.3 && z < d.z1; }
 
   placeCivic(b, rects, kind) {
     const { cx, cz } = b; const x0 = cx - LOT, x1 = cx + LOT, z0 = cz - LOT + 12, z1 = cz + 8; const h = kind === 'police' ? 16 : 26;
@@ -831,6 +901,17 @@ export class World {
     if (kind === 'police') this.props.sign('POLICE', cx, CURB + 6.4, z0 - 0.35, Math.PI, 12, 2.6, { bg: '#0d2c6b', fg: '#ffffff', border: '#ffffff' });
     else this.props.sign('HOSPITAL', cx, CURB + 6.4, z0 - 0.35, Math.PI, 14, 2.6, { bg: '#ffffff', fg: '#c1121f', border: '#c1121f', icon: 'cross' });
     this.specials[kind] = { x: cx, z: z0 - 4, yaw: Math.PI, road: [cx, cz - SLAB - 6] };
+    if (kind === 'police') { // glass front doors with the front desk behind them, and cruiser bays in the forecourt
+      this.ensureStoreMats();
+      const dm = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 2.8), this.storeMat.dark); dm.position.set(cx, CURB + 1.4, z0 - 0.03); dm.rotation.y = Math.PI; this.root.add(dm);
+      this.gb.metal.box(cx - 1.75, cx - 1.6, CURB, CURB + 2.95, z0 - 0.15, z0, [1, 1, 1]); this.gb.metal.box(cx + 1.6, cx + 1.75, CURB, CURB + 2.95, z0 - 0.15, z0, [1, 1, 1]); this.gb.metal.box(cx - 1.75, cx + 1.75, CURB + 2.8, CURB + 2.95, z0 - 0.15, z0, [1, 1, 1]); this.gb.metal.box(cx - 0.03, cx + 0.03, CURB, CURB + 2.8, z0 - 0.1, z0, [1, 1, 1]);
+      this.props.sign('FRONT DESK · JOIN SAPD', cx, CURB + 3.45, z0 - 0.3, Math.PI, 4.8, 0.55, { bg: '#0d2c6b', fg: '#ffffff', size: 56 });
+      const bays = [cx + 12.5, cx + 17.5, cx + 22.5, cx - 12.5, cx - 17.5, cx - 22.5].map((x) => ({ x, z: z0 - 5.2, yaw: Math.PI }));
+      for (const bb of bays) for (const e of [-1.6, 1.6]) this.gb.props.box(bb.x + e - 0.06, bb.x + e + 0.06, CURB + 0.006, CURB + 0.012, bb.z - 2.8, bb.z + 2.8, [0.95, 0.95, 0.95]);
+      const displays = [{ type: 'police', x: bays[1].x, z: bays[1].z, yaw: Math.PI }, { type: 'policeSUV', x: bays[2].x, z: bays[2].z, yaw: Math.PI }, { type: 'police', x: bays[4].x, z: bays[4].z, yaw: Math.PI }];
+      for (const d of displays) { const ty = CAR_TYPES[d.type]; this.boxCollider(d.x - ty.W / 2, d.x + ty.W / 2, d.z - ty.L / 2, d.z + ty.L / 2, 0, CURB + ty.H, true); }
+      Object.assign(this.specials.police, { desk: [cx, z0 - 1.3], unitBay: bays[0], displays });
+    }
     return [[x0, z1 + 1, x1, cz + LOT]];
   }
 
@@ -1039,7 +1120,7 @@ export class World {
     add(this.gb.roof, this.mat.roof, false, true);
     add(this.gb.props, this.mat.props, true, true);
     add(this.gb.metal, this.mat.metal, true, true);
-    if (this.storeGB) { add(this.storeGB.peg, this.storeMat.peg, false, true); add(this.storeGB.floor, this.storeMat.floor, false, true); add(this.storeGB.ceil, this.storeMat.ceil, false, false); }
+    if (this.storeGB) { add(this.storeGB.peg, this.storeMat.peg, false, true); add(this.storeGB.floor, this.storeMat.floor, false, true); add(this.storeGB.ceil, this.storeMat.ceil, false, false); add(this.storeGB.show, this.storeMat.showFloor, false, true); add(this.storeGB.plaster, this.storeMat.plaster, false, true); }
     const asp = this.mat.asphalt.clone(); asp.map = this.asphaltTex.map.clone(); asp.map.repeat.set(1, 1); asp.normalMap = this.asphaltTex.normalMap.clone(); asp.normalMap.repeat.set(1, 1); asp.roughnessMap = null; asp.roughness = 0.88; asp.color.setScalar(0.9); surfaceShader(asp, 'asphalt', this.noiseTex);
     asp.map.needsUpdate = true; asp.normalMap.needsUpdate = true;
     asp.polygonOffset = true; asp.polygonOffsetFactor = -1; asp.polygonOffsetUnits = -1;

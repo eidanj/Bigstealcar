@@ -20,6 +20,7 @@ export class Wanted {
   // A crime: police who see it react at once; otherwise a civilian has to notice, care, and finish a phone call.
   crime(amount, why, o = {}) {
     if (amount <= 0) return; const g = this.game; if (g.state !== 'play') return;
+    if (g.police && g.police.excuse(amount, why, o)) return;
     const f = g.playerTarget(); const x = o.x ?? f.x, z = o.z ?? f.z;
     if (o.direct || (this.stars > 0 && this.seen) || this.policeSee(x, z)) { this.addHeat(amount, why, true); return; }
     // a call already in progress nearby just gets a longer story
@@ -236,6 +237,7 @@ export class Missions {
         const d = Math.hypot(pt.x - m.start[0], pt.z - m.start[1]);
         if (d < 4.2) {
           if (!car) { g.hud.help(`~y~${m.name}~w~: you need a vehicle to start this mission.`, 0.2); continue; }
+          if (g.police && g.police.onDuty) { g.hud.help('Go off duty at the police station to start missions.', 0.2); continue; }
           if (m.type === 'getaway' && g.wanted.stars > 0) { g.hud.help('Lose your current wanted level first.', 0.2); continue; }
           if (car.speed < 12) { this.start(m); return; }
         }

@@ -1,6 +1,6 @@
 // Big Steal Car — menus: Altekz intro, GTA-style main menu, loading screen, settings, pause menu with map.
 import { $, el, fmtMoney, clamp } from './util.js';
-import { VERSION, WEAPONS, ARMOR_PRICE } from './config.js';
+import { VERSION, WEAPONS, ARMOR_PRICE, CAR_TYPES, PAINT, POLICE_RANKS } from './config.js';
 import { wsvg } from './hud.js';
 
 const TIPS = [
@@ -21,16 +21,24 @@ const TIPS = [
   'At three stars the police stop asking nicely. Body armor helps.',
   'The Zentra R supercar is rare. Keep an eye out for it in parking spots.',
   'Press V to switch between near, far and hood cameras.',
+  'Big Deal Autos sells every car in town. Buy one and it waits for you at the delivery bay, and you can have it brought round any time.',
+  'Want to be on the other side? Walk up to the police station front desk and join the force.',
+  'On duty, tap H in your cruiser for lights and siren. Traffic pulls over for you.',
+  'Hold a suspect at gunpoint and they often give up. Sprint into a runner to tackle them.',
+  'Every car has its own headlights and taillights. Watch for the round tails of the old Cruisemaster at night.',
 ];
 const CONTROLS = [
   ['On foot', [['W A S D', 'Move'], ['Shift', 'Sprint'], ['Space', 'Jump'], ['F / E', 'Enter or steal a car'], ['Mouse', 'Look around']]],
   ['Driving', [['W / S', 'Accelerate / brake & reverse'], ['A / D', 'Steer'], ['Space', 'Handbrake drift'], ['F / E', 'Exit (bail out at speed)'], ['H', 'Horn'], [', / .', 'Left / right turn signal'], ['/', 'Hazard lights'], ['Q', 'Radio station'], ['V', 'Camera view'], ['C', 'Look behind'], ['R', 'Flip car upright'], ['W S A D in the air', 'Flip and roll']]],
   ['Weapons', [['Left mouse', 'Punch / shoot'], ['Right mouse', 'Aim (over the shoulder)'], ['1-6 / wheel', 'Switch weapon'], ['R', 'Reload'], ['F at a counter', 'Shop at Blast Barn']]],
+  ['Police job', [['F at the station door', 'Join / start or end a shift'], ['H (tap)', 'Lights and siren in a cruiser'], ['H (hold)', 'Horn'], ['Right mouse at a suspect', 'Hold them at gunpoint'], ['Sprint into a runner', 'Tackle'], ['F next to a suspect', 'Arrest / write a ticket']]],
+  ['Car dealership', [['F at the sales desk', 'Buy cars, deliver your own']]],
   ['General', [['M', 'Map + waypoint'], ['Esc / P', 'Pause menu'], ['Click', 'Capture the mouse']]],
 ];
 const TOUCH_CONTROLS = [
   ['On foot', [['Left stick', 'Move (push to the edge to sprint)'], ['Drag right side', 'Look around'], ['FIRE', 'Punch / shoot (drag it to aim while firing)'], ['AIM', 'Aim over the shoulder (tap to toggle)'], ['JUMP', 'Jump'], ['F', 'Steal a car / shop (or tap the prompt)'], ['SWAP · RELOAD', 'Switch weapon · reload']]],
   ['Driving', [['GAS / BRAKE', 'Right thumb, slide between them (hold BRAKE to reverse)'], ['◀ ▶', 'Left thumb steering, slide between them'], ['DRIFT', 'Handbrake slide'], ['EXIT', 'Get out (bail out at speed)'], ['Signal arrows · ⚠', 'Turn signals · hazard lights'], ['HORN · RADIO · CAM', 'Horn, radio station, camera view'], ['FLIP', 'Appears when your car is on its roof'], ['Drag the screen', 'Look around the car']]],
+  ['Police job', [['F at the station door', 'Join / start or end a shift'], ['HORN (tap)', 'Lights and siren in a cruiser'], ['AIM at a suspect', 'Hold them at gunpoint'], ['F next to a suspect', 'Arrest / write a ticket']]],
   ['General', [['❚❚', 'Pause menu + map (tap the map to set a waypoint)'], ['⛶', 'Full screen on / off (if your browser supports it)']]],
 ];
 const OPTS = {
@@ -60,7 +68,13 @@ export class UI {
     this.buildControls($('#controlsList')); this.buildControls($('#pauseControls'));
     this.buildSettings($('#settingsList')); this.buildSettings($('#pauseSettings'));
     setInterval(() => this.nextTip(), 6500); this.nextTip();
-    $('#shopList').addEventListener('click', (e) => { const row = e.target.closest('.sRow'); if (!row) return; const r = this.g.weapons.buy(row.dataset.item); if (r !== 'ok') this.g.audio.uiBack(); this.renderShop(r === 'ok' ? 'Thanks for shopping at Blast Barn!' : r); });
+    $('#shopList').addEventListener('click', (e) => {
+      const g = this.g; const sw = e.target.closest('[data-color]'); if (sw) { g.dealer.color = parseInt(sw.dataset.color, 10); g.audio.ui(); this.renderDealer(''); return; }
+      const row = e.target.closest('.sRow'); if (!row || row.classList.contains('off')) return;
+      if (this.kind === 'dealer') return this.dealerAct(row.dataset.act);
+      if (this.kind === 'police') return this.policeAct(row.dataset.act);
+      const r = g.weapons.buy(row.dataset.item); if (r !== 'ok') g.audio.uiBack(); this.renderShop(r === 'ok' ? 'Thanks for shopping at Blast Barn!' : r);
+    });
     $('#shopClose').addEventListener('click', () => this.g.closeShop());
   }
   nextTip() { this.tipI = (this.tipI + 1) % TIPS.length; for (const t of document.querySelectorAll('.tipText')) { t.classList.remove('in'); void t.offsetWidth; t.textContent = TIPS[this.tipI]; t.classList.add('in'); } }
@@ -105,8 +119,58 @@ export class UI {
   }
   syncSettings(except) { for (const r of document.querySelectorAll('.setRow')) if (r !== except && r._upd) r._upd(); }
 
-  // ---------- gun store ----------
-  openShop() { $('#shop').classList.remove('hidden'); this.renderShop('What can I get you?'); }
+  // ---------- shops: gun store, car dealership, police front desk ----------
+  openShop(kind = 'guns') {
+    this.kind = kind; const s = $('#shop'); s.classList.remove('hidden'); s.dataset.kind = kind;
+    const head = { guns: ['BLAST BARN', 'GUNS · AMMO · ARMOR', 'LEAVE COUNTER'], dealer: ['BIG DEAL AUTOS', 'NEW · USED · BIGGER', 'LEAVE SHOWROOM'], police: ['SAN ALTEKZ PD', 'FRONT DESK · TO PROTECT AND SERVE', 'LEAVE DESK'] }[kind];
+    s.querySelector('.shopLogo').textContent = head[0]; s.querySelector('.shopSub').textContent = head[1]; $('#shopClose').textContent = head[2];
+    s.querySelector('.shopFoot span').innerHTML = kind === 'guns' ? '<kbd>Click</kbd> buy &nbsp; <kbd>Esc</kbd> leave' : '<kbd>Click</kbd> choose &nbsp; <kbd>Esc</kbd> leave';
+    if (kind === 'dealer') this.renderDealer('Welcome to Big Deal Autos! Pick a colour, then pick your ride.');
+    else if (kind === 'police') this.renderPolice('');
+    else this.renderShop('What can I get you?');
+  }
+  dealerAct(act) {
+    const g = this.g; const [k, v] = act.split(':');
+    if (k === 'buy') { const r = g.dealer.buy(v); if (r === 'ok') { this.renderDealer(`Congratulations! Your new ${CAR_TYPES[v].name} is waiting at the delivery bay outside.`); g.audio.chime(true); } else { g.audio.uiBack(); this.renderDealer(r); } }
+    else if (k === 'deliver') { g.dealer.deliver(+v); g.audio.ui(); this.renderDealer('Your car has been brought round to the delivery bay.'); }
+  }
+  renderDealer(msg) {
+    const g = this.g, D = g.dealer; const rows = [];
+    const stat = (label, v) => `<span>${label}<i><em style="width:${Math.round(clamp(v, 0.04, 1) * 100)}%"></em></i></span>`;
+    rows.push(`<div class="swatches">${PAINT.map((c) => `<button data-color="${c}" class="${c === D.color ? 'on' : ''}" style="background:#${c.toString(16).padStart(6, '0')}"></button>`).join('')}</div>`);
+    if (g.save.garage.length) {
+      rows.push('<h5>YOUR GARAGE</h5>');
+      g.save.garage.forEach((e, i) => { const t = CAR_TYPES[e.type]; rows.push(`<div class="sRow car mine" data-act="deliver:${i}"><img src="${D.thumb(e.type)}" alt=""><div><b>${t.name}</b><p><i class="chip" style="background:#${(e.color >>> 0).toString(16).padStart(6, '0')}"></i>${t.cls}</p></div><div class="sBuy ammo">DELIVER<small>free</small></div></div>`); });
+      rows.push('<h5>FOR SALE</h5>');
+    }
+    for (const t of D.list) {
+      const s = D.stats(t);
+      rows.push(`<div class="sRow car" data-act="buy:${t.key}"><img src="${D.thumb(t.key)}" alt=""><div><b>${t.name} <small>${t.cls}</small></b><div class="sStats">${stat('SPEED', s.speed)}${stat('ACCEL', s.accel)}${stat('GRIP', s.handling)}</div></div><div class="sBuy ${g.cash < t.price ? 'poor' : ''}">BUY<small>${fmtMoney(t.price)}</small></div></div>`);
+    }
+    const list = $('#shopList'); const top = list.scrollTop; list.innerHTML = rows.join(''); list.scrollTop = top; $('#shopCash').textContent = fmtMoney(g.cash); $('#shopMsg').textContent = msg || '';
+  }
+  policeAct(act) {
+    const g = this.g, P = g.police; let r = 'ok', msg = '';
+    if (act === 'join') { r = P.join(); msg = r === 'ok' ? 'Welcome to the San Altekz Police Department, officer. Suit up and pick a shift.' : r; }
+    else if (act === 'calls' || act === 'patrol') { r = P.goOnDuty(act); msg = r === 'ok' ? (act === 'calls' ? 'You\'re on 911 calls. Your cruiser is parked out front. Dispatch will send you jobs.' : 'You\'re on patrol. Your cruiser is parked out front. Cover ground and stop crime you see.') : r; if (r === 'ok') setTimeout(() => g.closeShop(), 900); }
+    else if (act === 'off') { P.offDuty(); msg = 'Shift over. See you tomorrow.'; }
+    else if (act === 'resign') { P.resign(); msg = 'You handed in your badge.'; }
+    if (r !== 'ok') g.audio.uiBack(); else g.audio.ui();
+    this.renderPolice(msg);
+  }
+  renderPolice(msg) {
+    const g = this.g, P = g.police, s = P.s; const rows = []; const nx = P.nextRank;
+    const row = (act, title, desc, btn, cls = '') => `<div class="sRow desk ${cls}" data-act="${act}"><svg viewBox="0 0 80 40"><path d="M40 4l20 6v10c0 9-9 15-20 17C29 35 20 29 20 20V10z" fill="#4ea8ff" stroke="#111" stroke-width="2.5"/><text x="40" y="26" font-size="12" text-anchor="middle" fill="#111" font-weight="bold">SAPD</text></svg><div><b>${title}</b><p>${desc}</p></div><div class="sBuy">${btn}</div></div>`;
+    if (!s.joined) rows.push(row('join', 'Join the force', 'Sign up as an officer. Answer 911 calls or patrol the city, arrest suspects and get paid. Climb the ranks for better pay and a bigger cruiser.', 'APPLY'));
+    else {
+      rows.push(`<div class="badge"><b>${P.rank.name.toUpperCase()}</b><span>${s.arrests} arrests · ${s.tickets} tickets · ${fmtMoney(s.earned)} earned</span>${nx ? `<span>Next rank: ${nx.name} at ${nx.at} arrests · pay x${nx.pay}</span>` : '<span>Top rank. The city is yours to protect.</span>'}</div>`);
+      rows.push(row('calls', P.onDuty && P.mode === 'calls' ? 'On 911 calls' : 'Shift: answer 911 calls', 'Dispatch sends you to crimes across the city: fights, robberies, stolen cars, reckless drivers. Arrest the suspect for pay.', P.onDuty && P.mode === 'calls' ? 'ACTIVE' : 'START', P.onDuty && P.mode === 'calls' ? 'off' : ''));
+      rows.push(row('patrol', P.onDuty && P.mode === 'patrol' ? 'On patrol' : 'Shift: patrol the city', 'Drive your beat and get paid for the ground you cover. Stop the crimes you spot along the way.', P.onDuty && P.mode === 'patrol' ? 'ACTIVE' : 'START', P.onDuty && P.mode === 'patrol' ? 'off' : ''));
+      if (P.onDuty) rows.push(row('off', 'End shift', 'Hand back the cruiser and change out of uniform.', 'CLOCK OUT'));
+      rows.push(row('resign', 'Resign', 'Quit the force. You can apply again later.', 'RESIGN'));
+    }
+    $('#shopList').innerHTML = rows.join(''); $('#shopCash').textContent = fmtMoney(g.cash); $('#shopMsg').textContent = msg || '';
+  }
   closeShop() { $('#shop').classList.add('hidden'); }
   renderShop(msg) {
     const g = this.g, W = g.weapons; const rows = [];

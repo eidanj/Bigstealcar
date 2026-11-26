@@ -28,7 +28,7 @@ export class CameraRig {
       if (this.orbitT > 0) this.orbitT -= dt; else { this.yaw = dampAngle(this.yaw, target, 2.6 + sp * 0.06, dt); this.pitch = damp(this.pitch, 0.16, 2, dt); }
       const view = this.view % 3;
       if (view === 2) { // hood cam
-        const p = new V3(0, Math.max(car.type.prof.beltH + 0.42, car.type.H - 0.02) - car.comH, car.type.prof.ws + 0.3).applyQuaternion(car.quat).add(car.pos);
+        const p = new V3(0, Math.max(car.type.prof.beltH + 0.42, (car.type.prof.cabH ?? car.type.H) - 0.02) - car.comH, car.type.prof.ws + 0.3).applyQuaternion(car.quat).add(car.pos);
         desired.copy(p); look.copy(p).addScaledVector(car.fwd, 20); look.y -= 1.2;
         this.cam.position.copy(desired); this.look.copy(look); this.blend = 1; fov += smooth(10, 70, sp) * 14; this.applyFov(fov, dt); this.cam.lookAt(look); return;
       }

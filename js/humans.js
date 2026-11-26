@@ -238,7 +238,7 @@ export class Character {
     this.state = 'seat'; this.visible = true; this.carT = car; this.seatSide = side;
   }
   updateSeat(car) {
-    const t = car.type; const rootY = t.clear + 0.0; const sc = clamp((t.H - 0.1 - rootY) / 1.28, 0.7, 0.92);
+    const t = car.type; const rootY = t.prof.seatY ?? t.clear; const sc = clamp(((t.prof.cabH ?? t.H) - 0.1 - rootY) / 1.28, 0.7, 0.92);
     const local = _v.set(0.36 * this.seatSide * (t.W / 1.86), -car.comH + rootY, (t.prof.ws + t.prof.rr) / 2 - 0.05);
     this.drawPos.copy(local).applyQuaternion(car.quat).add(car.pos); this.drawQuat.copy(car.quat); this.pos.copy(this.drawPos);
     this.scale = sc;

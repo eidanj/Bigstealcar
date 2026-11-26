@@ -113,6 +113,7 @@ export class HUD {
       h.innerHTML = car ? fmt('<b>DRIVING</b> [W][S] gas / brake · [A][D] steer · [Space] drift · [F] exit · [H] horn · [,][.] signals · [/] hazards · [Q] radio · [V] camera · [M] map')
         : fmt('<b>ON FOOT</b> [W][A][S][D] move · [Shift] sprint · [Space] jump · [F] steal a car · [LMB] punch / shoot · [RMB] aim · [1]-[6] weapons · [M] map'); h.classList.remove('faded'); }
     if (this.modeT > 0) { this.modeT -= dt; if (this.modeT <= 0) document.getElementById('modeHint').classList.add('faded'); }
+    const duty = g.police.dutyText(); if (duty !== this._duty) { this._duty = duty; const d = $('#duty'); d.textContent = duty; d.classList.toggle('hidden', !duty); }
     this.drawMinimap(); if (car) this.drawSpeedo(car); this.spC.parentElement.classList.toggle('hidden', !car);
     const flip = !!car && (car.upsideT > 0.6 || (car.up.y < 0.75 && car.speed < 3)); if (flip !== this._flip) { this._flip = flip; document.body.classList.toggle('canflip', flip); }
   }
@@ -173,6 +174,9 @@ export class HUD {
     for (const s of g.world.specials.spray || []) blip(s.x, s.z, icon('#7bdff2', 'S', 6), false);
     if (g.world.specials.police) blip(g.world.specials.police.x, g.world.specials.police.z, icon('#4361ee', 'P', 6), false);
     for (const st of g.world.specials.stores || []) blip(st.x, st.z, icon('#ff8c42', 'A', 6), false);
+    if (g.world.specials.dealer) blip(...g.world.specials.dealer.icon, icon('#ffd60a', '$', 6), false);
+    if (g.dealer.personal && g.cars.includes(g.dealer.personal) && g.dealer.personal !== g.playerCar) blip(g.dealer.personal.pos.x, g.dealer.personal.pos.z, dot('#38d39f', 4.5));
+    if (g.police.unit && g.cars.includes(g.police.unit) && g.police.unit !== g.playerCar) blip(g.police.unit.pos.x, g.police.unit.pos.z, dot('#4ea8ff', 4.5));
     if (g.world.specials.hospital) blip(g.world.specials.hospital.x, g.world.specials.hospital.z, icon('#f8f9fa', '+', 6), false);
     for (const it of g.pickups.blips) blip(it.x, it.z, it.kind === 'star' ? icon('#ffd23f', '★', 6) : icon('#2ecc71', '♥', 5), false);
     for (const m of g.missions.blips) blip(m.x, m.z, icon(m.type === 'race' ? '#ffd60a' : m.type === 'stunt' ? '#38d39f' : '#ff4d6d', m.type[0].toUpperCase()));
@@ -184,6 +188,7 @@ export class HUD {
     // witnesses on the phone to the cops, troublemakers who've turned hostile
     for (const r of g.wanted.reports) if (r.who.brain) blip(r.who.pos.x, r.who.pos.z, (cx2) => { cx2.fillStyle = ph ? '#ffd60a' : '#fff'; cx2.strokeStyle = '#111'; cx2.lineWidth = 1.5; cx2.beginPath(); cx2.roundRect ? cx2.roundRect(-4, -6.5, 8, 13, 2) : cx2.rect(-4, -6.5, 8, 13); cx2.fill(); cx2.stroke(); cx2.fillStyle = '#111'; cx2.fillRect(-2.5, -4.5, 5, 7); });
     for (const h of g.peds.list) if (h.naughty && ['fight', 'shootback', 'ambush'].includes(h.brain.mode)) blip(h.pos.x, h.pos.z, dot('#ff3b3b', 3.5), false);
+    for (const b of g.police.blips) blip(b.x, b.z, b.kind === 'suspect' ? (cx2, edge) => { cx2.fillStyle = ph ? '#ff3b3b' : '#ffffff'; cx2.strokeStyle = '#111'; cx2.lineWidth = 1.5; cx2.beginPath(); cx2.moveTo(0, -8); cx2.lineTo(7, 6); cx2.lineTo(-7, 6); cx2.closePath(); cx2.fill(); cx2.stroke(); void edge; } : dot('#ff3b3b', 3.5), b.kind === 'suspect');
     // player arrow
     const heading = car ? Math.atan2(car.fwd.x, car.fwd.z) : g.player.char.yaw; const a = -(heading - g.rig.yaw);
     x.save(); x.translate(cx, cy); x.scale(dpr, dpr); x.rotate(a);
@@ -247,6 +252,9 @@ export class HUD {
     for (const s2 of g.world.specials.spray || []) ic(s2.x, s2.z, '#7bdff2', 'S');
     if (g.world.specials.police) ic(g.world.specials.police.x, g.world.specials.police.z, '#4361ee', 'P');
     for (const st of g.world.specials.stores || []) ic(st.x, st.z, '#ff8c42', 'A');
+    if (g.world.specials.dealer) { const [dx, dz] = g.world.specials.dealer.icon; ic(dx, dz, '#ffd60a', '$', 9); const [px, py] = M(dx, dz); x.fillStyle = '#fff'; x.font = '600 12px Oswald, Arial'; x.textAlign = 'center'; x.fillText('Big Deal Autos', px, py + 20); }
+    if (g.world.specials.police) { const [px, py] = M(g.world.specials.police.x, g.world.specials.police.z); x.fillStyle = '#fff'; x.font = '600 12px Oswald, Arial'; x.textAlign = 'center'; x.fillText(g.police.s.joined ? 'Police (front desk)' : 'Police · join the force', px, py + 20); }
+    for (const b of g.police.blips) ic(b.x, b.z, '#ff3b3b', '!', 8);
     if (g.world.specials.hospital) ic(g.world.specials.hospital.x, g.world.specials.hospital.z, '#f8f9fa', '+');
     for (const it of g.pickups.blips) ic(it.x, it.z, it.kind === 'star' ? '#ffd23f' : '#2ecc71', it.kind === 'star' ? '★' : '♥', 6);
     for (const m of g.missions.list) { ic(m.start[0], m.start[1], m.type === 'race' ? '#ffd60a' : m.type === 'stunt' ? '#38d39f' : '#ff4d6d', m.type[0].toUpperCase(), 10); const [px, py] = M(m.start[0], m.start[1]); x.fillStyle = '#fff'; x.font = '600 12px Oswald, Arial'; x.fillText(m.name + (g.save.done[m.id] ? ' ✓' : ''), px, py + 20); }

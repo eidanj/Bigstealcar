@@ -47,6 +47,7 @@ export class Peds {
       this.timer = 0.4;
       for (const ch of [...this.list]) {
         const d = Math.hypot(ch.pos.x - f.x, ch.pos.z - f.z);
+        if (ch.keep) continue;
         if (ch.surrender) { ch.surT = (ch.surT || 0) + 0.4; if ((ch.surT > 9 && !g.inView(ch.pos.x, ch.pos.z, 2)) || ch.surT > 45) { this.remove(ch); continue; } } // taken into custody
         if (d > 175 || (d > 120 && !g.inView(ch.pos.x, ch.pos.z, 2) && this.list.length > g.pedTarget)) this.remove(ch);
       }
@@ -71,7 +72,7 @@ export class Peds {
   think(ch, dt) {
     const g = this.game, W = g.world, B = ch.brain;
     ch.phone = B.mode === 'call'; ch.surrender = B.mode === 'surrender';
-    if (ch.state !== 'walk') { ch.aimPose = false; ch.physicsRagdoll(dt); if (ch.state === 'walk' && B.mode !== 'surrender') { B.mode = 'return'; ch.panic = 2.5; } ch.animate(dt); this.carHits(ch); return; }
+    if (ch.state !== 'walk') { ch.aimPose = false; ch.physicsRagdoll(dt); if (ch.state === 'walk' && B.mode !== 'surrender') { if (ch.suspect) { B.mode = Math.random() < 0.6 ? 'surrender' : 'flee'; B.t = 0; ch.armed = false; ch.gun = null; } else { B.mode = 'return'; ch.panic = 2.5; } } ch.animate(dt); this.carHits(ch); return; }
     if (ch.punchT > 0) ch.punchT -= dt;
     if (B.mode === 'call' || B.mode === 'surrender') { // on the phone to the cops / hands up, waiting to be taken in
       const pp = g.player.char.pos; if (B.mode === 'call') ch.faceToward(pp.x - ch.pos.x, pp.z - ch.pos.z, dt, 5);
@@ -134,7 +135,7 @@ export class Peds {
     const dpx = pc.pos.x - ch.pos.x, dpz = pc.pos.z - ch.pos.z, dp = Math.hypot(dpx, dpz);
     const gun = () => { if (!ch.gun) { ch.gun = g.weapons.takeGun(); if (!ch.handM) ch.handM = new THREE.Matrix4(); } };
     if (B.mode === 'fight') { // squaring up after being punched
-      if (g.playerCar || pc.state !== 'walk' || dp > 30 || g.state !== 'play') { B.mode = 'return'; return false; }
+      if (g.playerCar || pc.state !== 'walk' || dp > 30 || g.state !== 'play') { if (ch.suspect) { B.mode = 'flee'; B.t = 0; return true; } B.mode = 'return'; return false; }
       ch.faceToward(dpx, dpz, dt, 14);
       if (dp > 1.15) wish.set(dpx / dp * 4.6, 0, dpz / dp * 4.6);
       B.punchCD = (B.punchCD ?? 0.3) - dt;
@@ -161,10 +162,19 @@ export class Peds {
         if (!B.reported) { B.reported = true; this.becomeSuspect(ch, car, '~r~Someone opened fire on a police cruiser!~w~ The ~b~cops~w~ are going after them.'); }
         if (B.shots <= 0) { B.mode = 'flee'; B.t = 0; ch.ambushCD = 40; }
       }
+    } else if (B.mode === 'harass') { // the crime a 911 call is about: roughing someone up, waving a gun, smashing things
+      const v = B.victim && this.list.includes(B.victim) && B.victim.state === 'walk' ? B.victim : null; B.punchCD = (B.punchCD ?? 0.8) - dt;
+      if (v) {
+        const dx = v.pos.x - ch.pos.x, dz = v.pos.z - ch.pos.z, d = Math.hypot(dx, dz) || 1; ch.faceToward(dx, dz, dt, 8); if (d > 1.35) wish.set(dx / d * 1.4, 0, dz / d * 1.4);
+        if (ch.armed) { gun(); ch.aimPose = true; ch.aimPitch = 0; ch.twoHand = false; }
+        else if (d < 1.7 && B.punchCD <= 0) { ch.punchDur = 0.34; ch.punchT = 0.34; ch.punchArm = 1 - (ch.punchArm || 0); B.punchCD = 1.0 + Math.random() * 0.8; if (Math.hypot(g.focus.x - ch.pos.x, g.focus.z - ch.pos.z) < 40) g.audio.swing(false); if (Math.random() < 0.2) v.knock(new V3(dx / d * 2, 1.2, dz / d * 2), 0.4); }
+      } else if (B.punchCD <= 0) { B.punchCD = 1.3 + Math.random(); ch.punchDur = 0.34; ch.punchT = 0.34; ch.punchArm = 1 - (ch.punchArm || 0); ch.yaw += (Math.random() - 0.5) * 1.5; }
+      if (ch.suspect && ch.suspect.type === 'shots') { B.shotT = (B.shotT ?? 1) - dt; if (B.shotT <= 0) { B.shotT = 1.4 + Math.random() * 2.2; gun(); const m = g.weapons.muzzlePos(ch, ch.gun); g.weapons.flash(m, 0.8); g.audio.gun('pistol', m, 0.9); for (const p of this.list) if (p !== ch && p.state === 'walk' && !p.naughty && p.brain.mode !== 'call' && Math.hypot(p.pos.x - ch.pos.x, p.pos.z - ch.pos.z) < 30) { p.panic = 4; p.brain.flee = [p.pos.x - ch.pos.x, p.pos.z - ch.pos.z]; } } ch.aimPose = true; ch.aimPitch = -0.6; }
     } else if (B.mode === 'flee') { // run from the nearest cop
       B.t = (B.t || 0) + dt; let fx = 0, fz = 0, nd = 1e9;
       for (const c of g.cars) if (c.role === 'police' && !c.dead) { const d = Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z); if (d < nd) { nd = d; fx = ch.pos.x - c.pos.x; fz = ch.pos.z - c.pos.z; } }
       for (const c of this.cops) { const d = Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z); if (d < nd) { nd = d; fx = ch.pos.x - c.pos.x; fz = ch.pos.z - c.pos.z; } }
+      if (g.police && g.police.onDuty) { const pp = g.playerTarget(); const d = Math.hypot(pp.x - ch.pos.x, pp.z - ch.pos.z); if (d < nd) { nd = d; fx = ch.pos.x - pp.x; fz = ch.pos.z - pp.z; } }
       if (nd > 70 && B.t > 6) { B.mode = 'return'; ch.panic = 0; return false; }
       const fl = Math.hypot(fx, fz) || 1; wish.set(fx / fl * 5.3, 0, fz / fl * 5.3);
       // don't run straight into a wall: slide along it

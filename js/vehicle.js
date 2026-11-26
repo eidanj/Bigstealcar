@@ -12,14 +12,14 @@ const GI = { h: 0, nx: 0, ny: 1, nz: 0 };
 const RATIOS = [3.3, 2.15, 1.55, 1.18, 0.94, 0.78], FINAL = 3.5;
 
 export class Vehicle {
-  constructor(game, typeKey, color, x, z, yaw) {
+  constructor(game, typeKey, color, x, z, yaw, wear) {
     this.game = game; this.typeKey = typeKey; const t = this.type = CAR_TYPES[typeKey];
-    this.model = game.carFactory.build(typeKey, color); this.color = this.model.color;
+    this.model = game.carFactory.build(typeKey, color, wear); this.color = this.model.color;
     this.group = this.model.group; game.scene.add(this.group);
     this.mass = t.mass; this.invMass = 1 / t.mass;
     const w = t.W, h = t.H * 0.8, l = t.L, m = t.mass;
     this.invI = new V3(12 / (m * (h * h + l * l)), 12 / (m * (w * w + l * l) * 1.05), 12 / (m * (w * w + h * h) * 1.7));
-    this.comH = clamp(t.clear + (t.H - t.clear) * 0.25, 0.4, 0.8);
+    this.comH = t.com ?? clamp(t.clear + (t.H - t.clear) * 0.25, 0.4, 0.8);
     this.model.model.position.y = -this.comH;
     this.ex = w / 2; this.ez = l / 2; this.ey = (t.H - t.clear) / 2; this.cy = (t.clear + t.H) / 2 - this.comH;
     this.radius = Math.hypot(this.ex, this.ez);
@@ -30,7 +30,7 @@ export class Vehicle {
     const tw = t.track / 2, fa = t.wb / 2;
     this.wheels = [[tw, fa, true], [-tw, fa, true], [tw, -fa, false], [-tw, -fa, false]].map(([x, z, front]) => ({
       local: new V3(x, mountY, z), front, right: x < 0, drive: t.drive === 'awd' || (t.drive === 'rwd' ? !front : front),
-      comp: 0, prevComp: 0, contact: false, spin: 0, spinVel: 0, slip: 0, slipLat: 0, load: 0, cp: new V3(), n: new V3(0, 1, 0), inst: game.wheels.alloc(typeKey === 'police' ? 0x303236 : (t.cls === 'Super' || t.cls === 'Sports') ? 0x2a2a2a : 0xffffff),
+      comp: 0, prevComp: 0, contact: false, spin: 0, spinVel: 0, slip: 0, slipLat: 0, load: 0, cp: new V3(), n: new V3(0, 1, 0), inst: game.wheels.alloc(t.cls === 'Police' ? 0x303236 : (t.cls === 'Super' || t.cls === 'Sports' || t.cls === 'Electric') ? 0x2a2a2a : t.cls === 'Truck' ? 0x9aa0a8 : 0xffffff),
       skid: -1,
     }));
     this.nDrive = this.wheels.filter((w2) => w2.drive).length;
