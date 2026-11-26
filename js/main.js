@@ -311,7 +311,14 @@ class Game {
     if (isPlayer) {
       this.rig.shake(hard * 0.5); if (vn > 6) this.stunts.crashed();
       const victim = car === this.playerCar ? other : car;
-      if (victim && victim.driver && now - (victim.hitByPlayer || -9) > 1.2) {
+      // whose fault? The normal points from other toward car, so compare how fast each one was closing in.
+      // Only blame the player when their car did most of the closing: parked, stopped or simply being
+      // rammed (a cruiser boxing you in, a driver rear-ending you) is not a crime.
+      // (the crash impulse is already applied, so undo it to get each car's speed just before contact)
+      const pre = (c) => c.vel.dot(n) - (c === car ? 1 : -1) * impulse * c.invMass;
+      const pc = this.playerCar, sgn = car === pc ? -1 : 1; const mine = sgn * pre(pc), theirs = victim ? -sgn * pre(victim) : 0;
+      const atFault = mine > 2 && mine >= theirs * 0.8;
+      if (victim && victim.driver && atFault && now - (victim.hitByPlayer || -9) > 1.2) {
         victim.hitByPlayer = now;
         if (victim.role === 'police') this.wanted.crime(vn > 4 ? 40 : 15, 'Ramming the ~b~police~w~? Bold move.', { direct: true, type: 'rampolice', victim });
         else this.wanted.crime(vn > 5 ? 9 : 4, this.wanted.stars === 0 ? 'Reckless driving right in front of a ~b~cop~w~!' : null, { type: 'reckless', victim, x: p.x, z: p.z });
