@@ -57,6 +57,9 @@ export class Player {
     if (dl && Math.hypot(ch.pos.x - dl.desk[0], ch.pos.z - dl.desk[1]) < 2.4) { g.hud.prompt('[F] Browse cars at ~y~Big Deal Autos'); if (input.hit('KeyF', 'KeyE') && g.lockControls <= 0) g.openShop(dl, 'dealer'); this.hurtT += dt; return; }
     if (ps && ps.desk && Math.hypot(ch.pos.x - ps.desk[0], ch.pos.z - ps.desk[1]) < 2.6) { g.hud.prompt(g.police.s.joined ? '[F] SAPD front desk' : '[F] Join the ~b~San Altekz Police'); if (input.hit('KeyF', 'KeyE') && g.lockControls <= 0) g.openShop(ps, 'police'); this.hurtT += dt; return; }
     if (g.police.onDuty && g.lockControls <= 0 && g.police.footWork(dt)) { this.hurtT += dt; return; }
+    // your own totaled car: pay to have it fixed on the spot
+    const wreck = st ? null : g.cars.find((c) => c.dead && c.personal && Math.hypot(c.pos.x - ch.pos.x, c.pos.z - ch.pos.z) < Math.max(c.ex, c.ez) + 2.2);
+    if (wreck && g.lockControls <= 0) { g.hud.prompt(`[F] Repair your ${wreck.type.name} · ~g~$200`); if (input.hit('KeyF', 'KeyE')) g.dealer.repairWreck(wreck); this.hurtT += dt; return; }
     // car prompt + enter
     const car = st ? null : this.nearestCar();
     if (car && g.lockControls <= 0) {

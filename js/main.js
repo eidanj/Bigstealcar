@@ -355,7 +355,11 @@ class Game {
       for (const h of this.peds.list) if (h !== ch && Math.hypot(h.pos.x - ch.pos.x, h.pos.z - ch.pos.z) < 18) { h.panic = 3; h.brain.flee = [h.pos.x - ch.pos.x, h.pos.z - ch.pos.z]; }
     }
   }
-  onWrecked(car) { if (car === this.playerCar) { this.hud.big('WRECKED', 'Engine destroyed. Find another ride.', 'wrecked', 2.6); this.audio.crash(car.pos, 1.2); } }
+  onWrecked(car) {
+    if (car.personal && car.garage) { car.garage.wrecked = true; this.saveGame(); } // (still yours: $200 to fix, here or at the dealer)
+    if (car === this.playerCar) { this.hud.big(car.personal ? 'TOTALED' : 'WRECKED', car.personal ? `Repair it for $200: ${this.touch ? 'tap FLIP' : 'press R'}.` : 'Engine destroyed. Find another ride.', 'wrecked', 2.6); this.audio.crash(car.pos, 1.2); }
+    else if (car.personal) this.hud.help(`Your ~y~${car.type.name}~w~ got totaled. Walk up to it and press ~b~[F]~w~ to repair it for ~g~$200~w~.`, 4);
+  }
   bustProgress(dt) { this.bustT += dt * 2; if (this.bustT > 2.4) this.busted(); }
 
   busted() {
@@ -404,7 +408,7 @@ class Game {
       if (!c.driver && !c.sleeping && c.grounded === 4 && c.speed < 0.15 && c.angVel.lengthSq() < 0.03) { c.sleepT += dt; if (c.sleepT > 1.2) { c.sleeping = true; c.vel.set(0, 0, 0); c.angVel.set(0, 0, 0); } } else if (!c.sleeping) c.sleepT = 0;
       if (c.up.y < 0.3) c.upsideT += dt; else c.upsideT = 0;
       if (c.ai && c.upsideT > 3.5 && c.speed < 2 && (!this.inView(c.pos.x, c.pos.z, 3) || c.upsideT > 6)) c.flip(); // AI cars quietly right themselves
-      if (c.pos.y < -6) { if (c === this.playerCar) { this.exitCar(true); this.knockedOut('water'); } else this.removeCar(c); }
+      if (c.pos.y < -6) { if (c.personal && c.garage && !c.garage.wrecked) { c.garage.wrecked = true; this.saveGame(); } if (c === this.playerCar) { this.exitCar(true); this.knockedOut('water'); } else this.removeCar(c); } // (a bought car that sinks can be fixed at the dealer)
     }
   }
   sim(dt) {
@@ -503,8 +507,9 @@ class Game {
       if (inp.hit('KeyH') && car.type.lightbar) { car.siren = !car.siren; car.sirenT = 0; this.audio.beep(); if (car.siren && !this._sirenTold) { this._sirenTold = true; this.hud.help('Lights and siren on. Traffic pulls over for you. Tap [H] again to switch them off, hold it for the horn.', 4); } }
       this.hornT = inp.down('KeyH') ? (this.hornT || 0) + dt : 0;
       if (inp.hit('Comma')) car.setSignal('L'); if (inp.hit('Period')) car.setSignal('R'); if (inp.hit('Slash')) car.hazard = !car.hazard;
-      if (inp.hit('KeyR') && (car.up.y < 0.6 || car.speed < 3)) car.flip();
-      if (car.upsideT > 1.5) this.hud.help(this.touch ? 'Tap [FLIP] to put your car back on its wheels.' : 'Press [R] to flip your car back over.', 0.3);
+      if (inp.hit('KeyR')) { if (car.dead && car.personal) this.dealer.repairWreck(car); else if (car.up.y < 0.6 || car.speed < 3) car.flip(); }
+      if (car.dead && car.personal) this.hud.help(`Totaled. ${this.touch ? 'Tap [FLIP]' : 'Press [R]'} to repair it for ~g~$200~w~.`, 0.3);
+      else if (car.upsideT > 1.5) this.hud.help(this.touch ? 'Tap [FLIP] to put your car back on its wheels.' : 'Press [R] to flip your car back over.', 0.3);
       if (inp.down('KeyH')) for (const h of this.peds.list) if (h.state === 'walk' && Math.hypot(h.pos.x - car.pos.x, h.pos.z - car.pos.z) < 14 && Math.random() < 0.02) { if (Math.random() < 0.5) h.wave = 1.2; else h.panic = 1.2; }
     } else p.updateFoot(dt, inp);
     // tutorial hints

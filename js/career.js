@@ -34,6 +34,7 @@ export class Showcase {
 // ======================= dealership =======================
 // a parking spot that's empty or only holds strays (random parked cars, traffic), which get cleared out of the way.
 // Never one with a car the player owns, bought or was just driving: those are left alone and the next spot is tried.
+export const REPAIR = 200; // flat price to fix a totaled car you bought
 function claimSpot(g, spots, r = 4) {
   const yours = (c) => c === g.playerCar || c === g.lastCar || c.owned || c.personal || c.keep;
   for (const s of spots) {
@@ -62,13 +63,21 @@ export class Dealer {
   }
   // your car rolls out to the delivery bay; only one of your cars is out at a time
   deliver(i) {
-    const g = this.g, e = g.save.garage[i]; if (!e) return;
+    const g = this.g, e = g.save.garage[i]; if (!e) return 'No such car.';
+    if (e.wrecked) { if (g.cash < REPAIR) return `Fixing your totaled ${CAR_TYPES[e.type].name} costs ${fmtMoney(REPAIR)}. You need ${fmtMoney(REPAIR - g.cash)} more.`; g.addCash(-REPAIR); e.wrecked = false; g.saveGame(); }
     if (this.personal && this.personal !== g.playerCar && g.cars.includes(this.personal)) g.removeCar(this.personal);
     // (if one of your other cars is sitting in the delivery bay, it rolls out on the street out front instead)
     const bay = claimSpot(g, [this.spot.bay]) || g.population.spawnPoint(5, 35, false, this.spot.bay) || this.spot.bay;
     const car = new g.Vehicle(g, e.type, e.color, bay.x, bay.z, bay.yaw, 0);
-    car.role = 'parked'; car.owned = true; car.personal = true; car.keep = true; car.sleeping = false; g.cars.push(car); this.personal = car;
-    g.hud.waypoint = [bay.x, bay.z]; g.hud.routeCache = null;
+    car.role = 'parked'; car.owned = true; car.personal = true; car.keep = true; car.sleeping = false; car.garage = e; g.cars.push(car); this.personal = car;
+    g.hud.waypoint = [bay.x, bay.z]; g.hud.routeCache = null; return 'ok';
+  }
+  // your bought car got totaled: fix it right where it lies (and put it back on its wheels)
+  repairWreck(car) {
+    const g = this.g;
+    if (g.cash < REPAIR) { g.audio.uiBack(); g.hud.help(`Repairs cost ~g~${fmtMoney(REPAIR)}~w~. You need ${fmtMoney(REPAIR - g.cash)} more.`, 2.5); return false; }
+    g.addCash(-REPAIR); car.repair(); if (car.up.y < 0.6) car.flip(); car.upsideT = 0; if (car.garage) car.garage.wrecked = false;
+    g.audio.spray(); g.hud.help(`Your ~y~${car.type.name}~w~ is good as new. ~g~-${fmtMoney(REPAIR)}`, 3); g.saveGame(); return true;
   }
   // a little studio render of each model for the catalogue (drawn into the main canvas for a frame, then copied)
   thumb(key) {

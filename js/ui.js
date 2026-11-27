@@ -7,6 +7,7 @@ const TIPS = [
   'Hit ramps at full speed for big stunt bonuses. Flips and perfect landings pay extra.',
   'Hold Space while turning to pull a handbrake drift. Long drifts earn cash.',
   'Pay & Spray garages give your car a new paint job and wipe your wanted level.',
+  'Totaled a car you bought? Walk up to it and press F, or press R inside it, to fix it for $200.',
   'Gold stars hidden in alleys clear your wanted level for free.',
   'Police lose track of you when you break line of sight. Your stars flash while they search.',
   'Press M to open the map, then click anywhere to set a GPS waypoint.',
@@ -132,7 +133,7 @@ export class UI {
   dealerAct(act) {
     const g = this.g; const [k, v] = act.split(':');
     if (k === 'buy') { const r = g.dealer.buy(v); if (r === 'ok') { this.renderDealer(`Congratulations! Your new ${CAR_TYPES[v].name} is waiting at the delivery bay outside.`); g.audio.chime(true); } else { g.audio.uiBack(); this.renderDealer(r); } }
-    else if (k === 'deliver') { g.dealer.deliver(+v); g.audio.ui(); this.renderDealer('Your car has been brought round to the delivery bay.'); }
+    else if (k === 'deliver') { const was = g.save.garage[+v] && g.save.garage[+v].wrecked; const r = g.dealer.deliver(+v); if (r === 'ok') { g.audio.ui(); this.renderDealer(was ? 'Fixed up good as new and brought round to the delivery bay. -$200' : 'Your car has been brought round to the delivery bay.'); } else { g.audio.uiBack(); this.renderDealer(r); } }
   }
   renderDealer(msg) {
     const g = this.g, D = g.dealer; const rows = [];
@@ -140,7 +141,7 @@ export class UI {
     rows.push(`<div class="swatches">${PAINT.map((c) => `<button data-color="${c}" class="${c === D.color ? 'on' : ''}" style="background:#${c.toString(16).padStart(6, '0')}"></button>`).join('')}</div>`);
     if (g.save.garage.length) {
       rows.push('<h5>YOUR GARAGE</h5>');
-      g.save.garage.forEach((e, i) => { const t = CAR_TYPES[e.type]; rows.push(`<div class="sRow car mine" data-act="deliver:${i}"><img src="${D.thumb(e.type)}" alt=""><div><b>${t.name}</b><p><i class="chip" style="background:#${(e.color >>> 0).toString(16).padStart(6, '0')}"></i>${t.cls}</p></div><div class="sBuy ammo">DELIVER<small>free</small></div></div>`); });
+      g.save.garage.forEach((e, i) => { const t = CAR_TYPES[e.type]; rows.push(`<div class="sRow car mine" data-act="deliver:${i}"><img src="${D.thumb(e.type)}" alt=""><div><b>${t.name}${e.wrecked ? ' <small class="wreck">TOTALED</small>' : ''}</b><p><i class="chip" style="background:#${(e.color >>> 0).toString(16).padStart(6, '0')}"></i>${t.cls}</p></div>${e.wrecked ? `<div class="sBuy ${g.cash < 200 ? 'poor' : ''}">REPAIR<small>$200 + delivery</small></div>` : '<div class="sBuy ammo">DELIVER<small>free</small></div>'}</div>`); });
       rows.push('<h5>FOR SALE</h5>');
     }
     for (const t of D.list) {

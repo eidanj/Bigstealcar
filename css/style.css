@@ -244,6 +244,7 @@ button { font-family: var(--hud); cursor: pointer; }
 .sStats span { display: flex; align-items: center; gap: 4px; } .sStats i { display: inline-block; width: 40px; height: 4px; background: rgba(255,255,255,0.15); position: relative; } .sStats i em { position: absolute; inset: 0 auto 0 0; background: #ffd60a; }
 .sBuy { min-width: 112px; text-align: center; font-weight: 700; letter-spacing: 0.08em; padding: 8px 10px; background: #c1121f; color: #fff; font-size: 14px; }
 .sBuy.owned { background: rgba(255,255,255,0.12); } .sBuy.ammo { background: #2a9d8f; } .sBuy.poor { opacity: 0.45; }
+.sRow .wreck, .sRow b small.wreck { color: #ff6b5a; opacity: 1; font-weight: 700; letter-spacing: 0.04em; }
 .sBuy small { display: block; font-size: 11px; font-weight: 500; opacity: 0.85; }
 .shopMsg { min-height: 22px; padding: 4px 20px; font-size: 14px; color: #ffd60a; }
 .shopFoot { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px 14px; font-size: 13px; opacity: 0.9; }
