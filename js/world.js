@@ -910,7 +910,7 @@ export class World {
       for (const bb of bays) for (const e of [-1.6, 1.6]) this.gb.props.box(bb.x + e - 0.06, bb.x + e + 0.06, CURB + 0.006, CURB + 0.012, bb.z - 2.8, bb.z + 2.8, [0.95, 0.95, 0.95]);
       const displays = [{ type: 'police', x: bays[1].x, z: bays[1].z, yaw: Math.PI }, { type: 'policeSUV', x: bays[2].x, z: bays[2].z, yaw: Math.PI }, { type: 'police', x: bays[4].x, z: bays[4].z, yaw: Math.PI }];
       for (const d of displays) { const ty = CAR_TYPES[d.type]; this.boxCollider(d.x - ty.W / 2, d.x + ty.W / 2, d.z - ty.L / 2, d.z + ty.L / 2, 0, CURB + ty.H, true); }
-      Object.assign(this.specials.police, { desk: [cx, z0 - 1.3], unitBay: bays[0], displays });
+      Object.assign(this.specials.police, { desk: [cx, z0 - 1.3], unitBay: bays[0], unitBays: [bays[0], bays[3], bays[5]], displays });
     }
     return [[x0, z1 + 1, x1, cz + LOT]];
   }

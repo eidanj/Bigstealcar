@@ -32,6 +32,19 @@ export class Showcase {
 }
 
 // ======================= dealership =======================
+// a parking spot that's empty or only holds strays (random parked cars, traffic), which get cleared out of the way.
+// Never one with a car the player owns, bought or was just driving: those are left alone and the next spot is tried.
+function claimSpot(g, spots, r = 4) {
+  const yours = (c) => c === g.playerCar || c === g.lastCar || c.owned || c.personal || c.keep;
+  for (const s of spots) {
+    if (!s) continue; const here = g.cars.filter((c) => Math.hypot(c.pos.x - s.x, c.pos.z - s.z) < r);
+    if (here.some(yours)) continue;
+    for (const c of here) g.removeCar(c);
+    return s;
+  }
+  return null;
+}
+
 export class Dealer {
   constructor(game) {
     this.g = game; this.spot = game.world.specials.dealer; this.color = PAINT[5]; this.thumbs = {}; this.personal = null;
@@ -49,9 +62,10 @@ export class Dealer {
   }
   // your car rolls out to the delivery bay; only one of your cars is out at a time
   deliver(i) {
-    const g = this.g, e = g.save.garage[i]; if (!e) return; const bay = this.spot.bay;
+    const g = this.g, e = g.save.garage[i]; if (!e) return;
     if (this.personal && this.personal !== g.playerCar && g.cars.includes(this.personal)) g.removeCar(this.personal);
-    for (const c of [...g.cars]) if (c !== g.playerCar && Math.hypot(c.pos.x - bay.x, c.pos.z - bay.z) < 4) g.removeCar(c);
+    // (if one of your other cars is sitting in the delivery bay, it rolls out on the street out front instead)
+    const bay = claimSpot(g, [this.spot.bay]) || g.population.spawnPoint(5, 35, false, this.spot.bay) || this.spot.bay;
     const car = new g.Vehicle(g, e.type, e.color, bay.x, bay.z, bay.yaw, 0);
     car.role = 'parked'; car.owned = true; car.personal = true; car.keep = true; car.sleeping = false; g.cars.push(car); this.personal = car;
     g.hud.waypoint = [bay.x, bay.z]; g.hud.routeCache = null;
@@ -122,8 +136,9 @@ export class PoliceJob {
     return 'ok';
   }
   spawnUnit() {
-    const g = this.g, bay = g.world.specials.police.unitBay; if (this.unit && g.cars.includes(this.unit) && !this.unit.dead) return;
-    for (const c of [...g.cars]) if (c !== g.playerCar && Math.hypot(c.pos.x - bay.x, c.pos.z - bay.z) < 4) g.removeCar(c);
+    const g = this.g, ps = g.world.specials.police; if (this.unit && g.cars.includes(this.unit) && !this.unit.dead) return;
+    // your own car parked in the unit bay stays put: the cruiser takes the next free bay (or the street) instead
+    const bay = claimSpot(g, ps.unitBays || [ps.unitBay]) || g.population.spawnPoint(6, 40, false, ps.unitBay) || ps.unitBay;
     const car = new g.Vehicle(g, this.rank.car, 0, bay.x, bay.z, bay.yaw, 0); car.role = 'parked'; car.owned = true; car.keep = true; car.unit = true; car.sleeping = false; g.cars.push(car); this.unit = car;
   }
   offDuty(silent) {
